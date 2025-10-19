@@ -1,6 +1,7 @@
 import type { Geometry } from './geometry';
 
-interface Shape {
+// FIX: Export the Shape interface to make it available for import in other modules.
+export interface Shape {
   geometry: Geometry;
   translation: [number, number, number];
   color?: [number, number, number, number]; // RGBA color

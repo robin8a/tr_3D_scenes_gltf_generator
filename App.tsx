@@ -1,17 +1,65 @@
-import React, { useState, useCallback } from 'react';
-import { createCube, createPyramid, createSphere, createTree } from './utils/geometry';
-import { buildGltf } from './utils/gltfBuilder';
-import { DownloadIcon } from './components/icons';
+
+import React, { useState, useCallback, useRef } from 'react';
+import { createCube, createPyramid, createSphere, createTree, Geometry } from './utils/geometry';
+import { buildGltf, type Shape } from './utils/gltfBuilder';
+import { parseObj } from './utils/objParser';
+import { DownloadIcon, UploadIcon, CloseIcon } from './components/icons';
 
 const App: React.FC = () => {
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [uploadedGeometry, setUploadedGeometry] = useState<Geometry | null>(null);
+  const [isParsing, setIsParsing] = useState<boolean>(false);
+  const [fileName, setFileName] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setIsParsing(true);
+    setFileName(file.name);
+    setUploadedGeometry(null);
+    setDownloadUrl(null);
+
+    try {
+      const text = await file.text();
+      const geometry = parseObj(text);
+      if (geometry.positions.length === 0) {
+        throw new Error("Parsed geometry is empty. The .obj file might be invalid or unsupported.");
+      }
+      setUploadedGeometry(geometry);
+    } catch (error) {
+      console.error("Failed to parse .obj file:", error);
+      alert(`An error occurred while parsing the .obj file: ${error instanceof Error ? error.message : String(error)}`);
+      setFileName(null);
+    } finally {
+      setIsParsing(false);
+      // Reset the input value to allow re-uploading the same file
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  }, []);
+
+  const handleUploadClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleClearFile = () => {
+    setUploadedGeometry(null);
+    setFileName(null);
+    setDownloadUrl(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
 
   const handleGenerateScene = useCallback(() => {
     setIsLoading(true);
     setDownloadUrl(null);
 
-    // Use a timeout to allow the UI to update to the loading state
     setTimeout(() => {
       try {
         const cube = createCube();
@@ -19,13 +67,24 @@ const App: React.FC = () => {
         const sphere = createSphere(0.75, 32, 16);
         const { trunk, canopy } = createTree();
 
-        const gltfJsonString = buildGltf([
+        // FIX: Explicitly type `shapes` as `Shape[]` to resolve type inference issues with `color` and `translation` properties.
+        const shapes: Shape[] = [
           { geometry: cube, translation: [-3, 0.5, 0], color: [0.8, 0.2, 0.2, 1.0] }, // Red
           { geometry: pyramid, translation: [-1, 0.5, 0], color: [0.2, 0.8, 0.2, 1.0] }, // Green
           { geometry: trunk, translation: [1, 0.5, 0], color: [0.54, 0.27, 0.07, 1.0] }, // Brown
           { geometry: canopy, translation: [1, 1.5, 0], color: [0.0, 0.5, 0.1, 1.0] }, // Dark Green
           { geometry: sphere, translation: [3, 0.75, 0], color: [0.2, 0.2, 0.8, 1.0] }, // Blue
-        ]);
+        ];
+
+        if (uploadedGeometry) {
+          shapes.push({
+            geometry: uploadedGeometry,
+            translation: [0, 1, -4],
+            color: [0.75, 0.75, 0.75, 1.0], // Silver
+          });
+        }
+
+        const gltfJsonString = buildGltf(shapes);
 
         const blob = new Blob([gltfJsonString], { type: 'model/gltf+json' });
         const url = URL.createObjectURL(blob);
@@ -36,8 +95,8 @@ const App: React.FC = () => {
       } finally {
         setIsLoading(false);
       }
-    }, 50); // Small delay
-  }, []);
+    }, 50);
+  }, [uploadedGeometry]);
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-200 flex items-center justify-center p-4 font-sans">
@@ -47,12 +106,52 @@ const App: React.FC = () => {
             3D Scene Generator
           </h1>
           <p className="text-lg text-gray-400 mb-8">
-            Create a <code className="bg-gray-700 text-purple-300 px-2 py-1 rounded">.gltf</code> file with a cube, pyramid, tree, and sphere. The generated file is compatible with AR viewers like <code className="bg-gray-700 text-purple-300 px-2 py-1 rounded">&lt;model-viewer&gt;</code>.
+            Create a <code className="bg-gray-700 text-purple-300 px-2 py-1 rounded">.gltf</code> file with primitives, or upload a <code className="bg-gray-700 text-purple-300 px-2 py-1 rounded">.obj</code> file to add it to the scene.
           </p>
+
+          <div className="my-8 border-t border-gray-700"></div>
+
+          <div className="space-y-4">
+            <h2 className="text-xl font-semibold text-gray-300">Add Your Own Model</h2>
+            <input
+              type="file"
+              accept=".obj"
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              className="hidden"
+              disabled={isParsing}
+            />
+            
+            {!fileName ? (
+              <button
+                onClick={handleUploadClick}
+                className="w-full max-w-sm border-2 border-dashed border-gray-600 hover:border-purple-500 hover:bg-gray-700/50 text-gray-300 font-bold py-3 px-6 rounded-lg transition-all duration-300 flex items-center justify-center"
+              >
+                <UploadIcon className="w-5 h-5 mr-2" />
+                Select .obj File
+              </button>
+            ) : (
+              <div className="w-full max-w-sm mx-auto flex items-center justify-between bg-gray-700 text-gray-200 p-3 rounded-lg">
+                <span className="truncate mr-2">{fileName}</span>
+                 {isParsing ? (
+                   <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                   </svg>
+                 ) : (
+                  <button onClick={handleClearFile} className="ml-2 p-1 rounded-full hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-purple-500" aria-label="Clear file">
+                    <CloseIcon className="w-5 h-5" />
+                  </button>
+                 )}
+              </div>
+            )}
+          </div>
+          
+           <div className="my-8 border-t border-gray-700"></div>
 
           <button
             onClick={handleGenerateScene}
-            disabled={isLoading}
+            disabled={isLoading || isParsing}
             className="w-full max-w-sm bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-bold py-4 px-6 rounded-lg shadow-lg transform hover:scale-105 transition-all duration-300 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed disabled:scale-100 flex items-center justify-center"
           >
             {isLoading ? (
