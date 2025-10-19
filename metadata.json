@@ -1,0 +1,5 @@
+{
+  "name": "3D Scene GLTF Generator",
+  "description": "An application to generate a downloadable .gltf file containing a scene with a cube, a pyramid, and a sphere, compatible with model-viewer.",
+  "requestFramePermissions": []
+}
