@@ -1,8 +1,7 @@
-// Fix: Replaced `import` with a triple-slash `reference` directive. This ensures
-// this file is treated as a global script, allowing the `JSX.IntrinsicElements`
-// interface to be correctly augmented rather than being replaced. This resolves
-// errors where standard HTML elements were not recognized in TSX files.
-/// <reference types="react" />
+// FIX: To augment the global JSX namespace, this file must be a module.
+// Importing 'react' achieves this and also loads the necessary React types,
+// resolving the errors related to global augmentation and missing namespaces.
+import 'react';
 
 declare global {
   namespace JSX {

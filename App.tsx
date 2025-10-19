@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { createCube, createPyramid, createSphere } from './utils/geometry';
+import { createCube, createPyramid, createSphere, createTree } from './utils/geometry';
 import { buildGltf } from './utils/gltfBuilder';
 import { DownloadIcon } from './components/icons';
 
@@ -17,11 +17,14 @@ const App: React.FC = () => {
         const cube = createCube();
         const pyramid = createPyramid();
         const sphere = createSphere(0.75, 32, 16);
+        const { trunk, canopy } = createTree();
 
         const gltfJsonString = buildGltf([
-          { geometry: cube, translation: [-2, 0.75, 0] },
-          { geometry: pyramid, translation: [0, 0.75, 0] },
-          { geometry: sphere, translation: [2, 0.75, 0] },
+          { geometry: cube, translation: [-3, 0.5, 0], color: [0.8, 0.2, 0.2, 1.0] }, // Red
+          { geometry: pyramid, translation: [-1, 0.5, 0], color: [0.2, 0.8, 0.2, 1.0] }, // Green
+          { geometry: trunk, translation: [1, 0.5, 0], color: [0.54, 0.27, 0.07, 1.0] }, // Brown
+          { geometry: canopy, translation: [1, 1.5, 0], color: [0.0, 0.5, 0.1, 1.0] }, // Dark Green
+          { geometry: sphere, translation: [3, 0.75, 0], color: [0.2, 0.2, 0.8, 1.0] }, // Blue
         ]);
 
         const blob = new Blob([gltfJsonString], { type: 'model/gltf+json' });
@@ -44,7 +47,7 @@ const App: React.FC = () => {
             3D Scene Generator
           </h1>
           <p className="text-lg text-gray-400 mb-8">
-            Create a <code className="bg-gray-700 text-purple-300 px-2 py-1 rounded">.gltf</code> file with a cube, pyramid, and sphere. The generated file is compatible with AR viewers like <code className="bg-gray-700 text-purple-300 px-2 py-1 rounded">&lt;model-viewer&gt;</code>.
+            Create a <code className="bg-gray-700 text-purple-300 px-2 py-1 rounded">.gltf</code> file with a cube, pyramid, tree, and sphere. The generated file is compatible with AR viewers like <code className="bg-gray-700 text-purple-300 px-2 py-1 rounded">&lt;model-viewer&gt;</code>.
           </p>
 
           <button
@@ -72,7 +75,7 @@ const App: React.FC = () => {
               <div className="w-full h-96 md:h-[500px] bg-gray-800/50 rounded-md mb-6 border border-gray-600">
                 <model-viewer
                   src={downloadUrl}
-                  alt="Generated 3D scene with a cube, pyramid, and sphere"
+                  alt="Generated 3D scene with various shapes"
                   ar
                   ar-modes="webxr scene-viewer quick-look"
                   camera-controls
