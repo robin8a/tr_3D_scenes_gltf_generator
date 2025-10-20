@@ -1,7 +1,9 @@
+
 export interface Geometry {
   positions: Float32Array;
   normals: Float32Array;
   indices: Uint16Array;
+  colors?: Float32Array;
 }
 
 export function createCube(size = 1): Geometry {
@@ -126,75 +128,4 @@ export function createSphere(radius = 1, sectorCount = 36, stackCount = 18): Geo
         normals: new Float32Array(normals),
         indices: new Uint16Array(indices)
     };
-}
-
-export function createTree(): { trunk: Geometry, canopy: Geometry } {
-  // --- Trunk (Hexagonal Prism) ---
-  const trunkRadius = 0.25;
-  const trunkHeight = 1;
-  const trunkPositions: number[] = [];
-  const trunkNormals: number[] = [];
-  const trunkIndices: number[] = [];
-
-  for (let i = 0; i < 6; i++) {
-    const angle = (i / 6) * 2 * Math.PI;
-    const x = trunkRadius * Math.cos(angle);
-    const z = trunkRadius * Math.sin(angle);
-    // Bottom vertex
-    trunkPositions.push(x, -trunkHeight / 2, z);
-    // Top vertex
-    trunkPositions.push(x, trunkHeight / 2, z);
-  }
-
-  for (let i = 0; i < 6; i++) {
-    const next = (i + 1) % 6;
-    const p1 = i * 2;
-    const p2 = next * 2;
-    const p3 = p1 + 1;
-    const p4 = p2 + 1;
-    trunkIndices.push(p1, p2, p3, p2, p4, p3);
-
-    const angle = (i / 6 + 0.5 / 6) * 2 * Math.PI;
-    const nx = Math.cos(angle);
-    const nz = Math.sin(angle);
-    trunkNormals.push(nx, 0, nz, nx, 0, nz);
-  }
-
-  // --- Canopy (Icosahedron) ---
-  const t = (1.0 + Math.sqrt(5.0)) / 2.0;
-  const canopyRadius = 0.8;
-  const canopyPositions: number[] = [
-    -1, t, 0,  1, t, 0,  -1, -t, 0,  1, -t, 0,
-    0, -1, t,  0, 1, t,  0, -1, -t,  0, 1, -t,
-    t, 0, -1,  t, 0, 1,  -t, 0, -1, -t, 0, 1,
-  ].map(p => p * canopyRadius * 0.5);
-
-  const canopyIndices = [
-    0, 11, 5,  0, 5, 1,  0, 1, 7,  0, 7, 10,  0, 10, 11,
-    1, 5, 9,  5, 11, 4, 11, 10, 2, 10, 7, 6,  7, 1, 8,
-    3, 9, 4,  3, 4, 2,  3, 2, 6,  3, 6, 8,  3, 8, 9,
-    4, 9, 5,  2, 4, 11, 6, 2, 10, 8, 6, 7,  9, 8, 1,
-  ];
-  
-  const canopyNormals: number[] = [];
-  for(let i = 0; i < canopyPositions.length; i += 3) {
-      const x = canopyPositions[i];
-      const y = canopyPositions[i+1];
-      const z = canopyPositions[i+2];
-      const len = Math.sqrt(x*x + y*y + z*z);
-      canopyNormals.push(x/len, y/len, z/len);
-  }
-
-  return {
-    trunk: {
-      positions: new Float32Array(trunkPositions),
-      normals: new Float32Array(trunkNormals),
-      indices: new Uint16Array(trunkIndices),
-    },
-    canopy: {
-      positions: new Float32Array(canopyPositions),
-      normals: new Float32Array(canopyNormals),
-      indices: new Uint16Array(canopyIndices),
-    }
-  };
 }
