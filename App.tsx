@@ -1,6 +1,7 @@
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { createCube, createPyramid, createSphere, Geometry } from './utils/geometry';
+import { createTree, createRock } from './utils/stockModels';
 import { buildGltf, type Shape } from './utils/gltfBuilder';
 import { parseObj } from './utils/objParser';
 import { parsePly } from './utils/plyParser';
@@ -14,6 +15,7 @@ const App: React.FC = () => {
   const [isParsing, setIsParsing] = useState<boolean>(false);
   const [fileNames, setFileNames] = useState<string[] | null>(null);
   const [parseMessage, setParseMessage] = useState<string>('');
+  const [stockModelsInScene, setStockModelsInScene] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -33,6 +35,7 @@ const App: React.FC = () => {
         setPreviewUrl(objectUrl);
         setDownloadUrl(null); // Clear previous full scene when new file is uploaded
       } catch (error) {
+        // FIX: Add type check for error object to prevent accessing properties on 'unknown'.
         console.error("Failed to generate preview:", error);
         alert("Could not generate a preview for the uploaded model.");
         setPreviewUrl(null);
@@ -125,7 +128,16 @@ const App: React.FC = () => {
       fileInputRef.current.value = '';
     }
   };
+  
+  const addStockModel = (model: string) => {
+    if (!stockModelsInScene.includes(model)) {
+      setStockModelsInScene(prev => [...prev, model]);
+    }
+  };
 
+  const removeStockModel = (model: string) => {
+    setStockModelsInScene(prev => prev.filter(m => m !== model));
+  };
 
   const handleGenerateScene = useCallback(() => {
     setIsLoading(true);
@@ -143,10 +155,28 @@ const App: React.FC = () => {
           { geometry: sphere, translation: [2, 0.75, 0], color: [0.2, 0.2, 0.8, 1.0] }, // Blue Sphere
         ];
 
+        if (stockModelsInScene.includes('tree')) {
+          const tree = createTree();
+          shapes.push({
+            geometry: tree,
+            translation: [-4, 0, -2],
+            // Color is defined in MTL, no need to specify here
+          });
+        }
+        
+        if (stockModelsInScene.includes('rock')) {
+          const rock = createRock();
+           shapes.push({
+            geometry: rock,
+            translation: [4, 0, -2],
+            // Color is defined in MTL, no need to specify here
+          });
+        }
+
         if (uploadedGeometry) {
           shapes.push({
             geometry: uploadedGeometry,
-            translation: [0, 1, -4],
+            translation: [0, 1.5, -5],
             // Only apply the default color if the geometry doesn't have its own vertex colors.
             color: (uploadedGeometry.colors && uploadedGeometry.colors.length > 0) ? undefined : [0.75, 0.75, 0.75, 1.0], 
           });
@@ -158,13 +188,14 @@ const App: React.FC = () => {
         const url = URL.createObjectURL(blob);
         setDownloadUrl(url);
       } catch (error) {
+        // FIX: Add type check for error object to prevent accessing properties on 'unknown'.
         console.error("Failed to generate scene:", error);
         alert("An error occurred while generating the scene. Check the console for details.");
       } finally {
         setIsLoading(false);
       }
     }, 50);
-  }, [uploadedGeometry]);
+  }, [uploadedGeometry, stockModelsInScene]);
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-200 flex items-center justify-center p-4 font-sans">
@@ -180,7 +211,7 @@ const App: React.FC = () => {
           <div className="my-8 border-t border-gray-700"></div>
 
           <div className="space-y-4 flex flex-col items-center">
-            <h2 className="text-xl font-semibold text-gray-300">Add Your Own Model</h2>
+            <h2 className="text-xl font-semibold text-gray-300">Upload Your Own Model (.obj/.ply)</h2>
             <input
               type="file"
               accept=".obj,.ply,.mtl"
@@ -239,6 +270,40 @@ const App: React.FC = () => {
               </div>
             </div>
           )}
+
+           <div className="my-8 border-t border-gray-700"></div>
+
+            <div className="space-y-4 flex flex-col items-center">
+                <h2 className="text-xl font-semibold text-gray-300">Add Stock Models to Scene</h2>
+                <div className="flex space-x-4">
+                    <button
+                        onClick={() => addStockModel('tree')}
+                        disabled={stockModelsInScene.includes('tree')}
+                        className="bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold py-2 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        Add 🌳 Tree
+                    </button>
+                    <button
+                        onClick={() => addStockModel('rock')}
+                        disabled={stockModelsInScene.includes('rock')}
+                        className="bg-gray-700 hover:bg-gray-600 text-gray-200 font-bold py-2 px-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        Add 🪨 Rock
+                    </button>
+                </div>
+                 {stockModelsInScene.length > 0 && (
+                    <div className="flex flex-wrap justify-center gap-2 mt-4 max-w-sm">
+                        {stockModelsInScene.map(model => (
+                            <div key={model} className="bg-purple-600/50 text-purple-200 text-sm font-medium pl-3 pr-2 py-1 rounded-full flex items-center gap-2 animate-fade-in">
+                                <span>{model === 'tree' ? '🌳 Tree' : '🪨 Rock'}</span>
+                                <button onClick={() => removeStockModel(model)} className="p-1 rounded-full text-purple-200 hover:text-white hover:bg-purple-500/50" aria-label={`Remove ${model}`}>
+                                    <CloseIcon className="w-3 h-3" />
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
 
            <div className="my-8 border-t border-gray-700"></div>
 
