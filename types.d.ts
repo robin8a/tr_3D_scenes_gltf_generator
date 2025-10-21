@@ -1,9 +1,24 @@
+// FIX: By turning this file into a module (with `export {}`) and using `declare global`,
+// we can correctly augment the global JSX namespace instead of overwriting it.
+// This fixes errors for all standard HTML elements (div, p, etc.) across the app
+// while still providing a type for the custom <model-viewer> element.
+export {};
 
-// FIX: Reverting this file to a global script (by removing the import statement)
-// allows it to augment React's global JSX types instead of overwriting them.
-// This fixes errors for all standard HTML elements (div, p, etc.) across the app.
-declare namespace JSX {
+declare global {
+  namespace JSX {
     interface IntrinsicElements {
-        'model-viewer': any;
+      'model-viewer': React.DetailedHTMLProps<
+        React.HTMLAttributes<HTMLElement> & {
+          src?: string | null;
+          alt?: string;
+          ar?: boolean;
+          'ar-modes'?: string;
+          'camera-controls'?: boolean;
+          'auto-rotate'?: boolean;
+          'shadow-intensity'?: string;
+        },
+        HTMLElement
+      >;
     }
+  }
 }
