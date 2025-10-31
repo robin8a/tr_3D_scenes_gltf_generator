@@ -1,6 +1,7 @@
 import type { Shape } from './gltfBuilder';
 import type { Geometry } from './geometry';
 import { createTree, createRock } from './stockModels';
+import { parseObj } from './objParser';
 
 // GeoJSON type definitions for clarity
 type Point = [number, number];
@@ -20,6 +21,17 @@ interface FeatureCollection {
     type: 'FeatureCollection';
     features: Feature[];
 }
+
+// Custom model type definitions
+interface CustomModelData {
+    obj: string;
+    mtl?: string;
+}
+export interface CustomModels {
+    tree?: CustomModelData;
+    rock?: CustomModelData;
+}
+
 
 /**
  * Triangulates a simple polygon using a basic fan algorithm from the first vertex.
@@ -53,7 +65,7 @@ function getCentroid(polygon: Point[]): Point {
     return [sumX / polygon.length, sumZ / polygon.length];
 }
 
-export async function parseGeoJsonToShapes(geojsonString: string): Promise<Shape[]> {
+export async function parseGeoJsonToShapes(geojsonString: string, customModels: CustomModels = {}): Promise<Shape[]> {
     const shapes: Shape[] = [];
     const geojson: FeatureCollection = JSON.parse(geojsonString);
 
@@ -89,8 +101,8 @@ export async function parseGeoJsonToShapes(geojsonString: string): Promise<Shape
     };
 
     // Pre-create models so they are not re-parsed for every feature
-    const treeModel = createTree();
-    const rockModel = createRock();
+    const treeModel = customModels.tree?.obj ? parseObj(customModels.tree.obj, customModels.tree.mtl) : createTree();
+    const rockModel = customModels.rock?.obj ? parseObj(customModels.rock.obj, customModels.rock.mtl) : createRock();
 
     for (const feature of geojson.features) {
         if (feature.geometry.type !== 'Polygon') continue;

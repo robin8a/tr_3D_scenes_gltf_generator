@@ -1,3 +1,5 @@
+import 'react';
+
 // FIX: By turning this file into a module (with `export {}`) and using `declare global`,
 // we can correctly augment the global JSX namespace instead of overwriting it.
 // This fixes errors for all standard HTML elements (div, p, etc.) across the app
