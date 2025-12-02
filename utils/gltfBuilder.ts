@@ -16,7 +16,8 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return window.btoa(binary);
 }
 
-export function buildGltf(shapes: Shape[]): string {
+// Internal function to generate the JSON structure and binary buffer
+function generateGltfParts(shapes: Shape[]): { gltf: any; combinedBuffer: ArrayBuffer } {
   const accessors: any[] = [];
   const bufferViews: any[] = [];
   const meshes: any[] = [];
@@ -174,9 +175,81 @@ export function buildGltf(shapes: Shape[]): string {
     materials,
     buffers: [{
       byteLength: totalByteLength,
-      uri: `data:application/octet-stream;base64,${arrayBufferToBase64(combinedBuffer)}`,
     }],
   };
+  return { gltf, combinedBuffer };
+}
 
+export function buildGltf(shapes: Shape[]): string {
+  const { gltf, combinedBuffer } = generateGltfParts(shapes);
+  gltf.buffers[0].uri = `data:application/octet-stream;base64,${arrayBufferToBase64(combinedBuffer)}`;
   return JSON.stringify(gltf, null, 2);
+}
+
+function padBuffer(buffer: Uint8Array, alignment: number, padWith: number): Uint8Array {
+    const remainder = buffer.byteLength % alignment;
+    if (remainder === 0) {
+      return buffer;
+    }
+    const padding = alignment - remainder;
+    const paddedBuffer = new Uint8Array(buffer.byteLength + padding);
+    paddedBuffer.set(buffer, 0);
+    paddedBuffer.fill(padWith, buffer.byteLength);
+    return paddedBuffer;
+}
+
+export function buildGlb(shapes: Shape[]): ArrayBuffer {
+  const { gltf, combinedBuffer } = generateGltfParts(shapes);
+
+  // 1. JSON chunk
+  const jsonString = JSON.stringify(gltf);
+  const jsonEncoder = new TextEncoder();
+  const jsonBytes = jsonEncoder.encode(jsonString);
+  const paddedJsonBytes = padBuffer(jsonBytes, 4, 0x20); // Pad with spaces
+
+  // 2. Binary chunk (BIN)
+  const binaryBytes = new Uint8Array(combinedBuffer);
+  const paddedBinaryBytes = padBuffer(binaryBytes, 4, 0x00); // Pad with nulls
+
+  const jsonChunkLength = paddedJsonBytes.byteLength;
+  const binaryChunkLength = paddedBinaryBytes.byteLength;
+  
+  // 3. GLB Header
+  const headerLength = 12;
+  const jsonChunkHeaderLength = 8;
+  const binaryChunkHeaderLength = 8;
+  const totalLength = headerLength + jsonChunkHeaderLength + jsonChunkLength + (binaryChunkLength > 0 ? binaryChunkHeaderLength + binaryChunkLength : 0);
+
+  const glbBuffer = new ArrayBuffer(totalLength);
+  const glbView = new DataView(glbBuffer);
+  let offset = 0;
+
+  // Header
+  const magic = 0x46546C67; // "glTF"
+  const version = 2;
+  glbView.setUint32(offset, magic, true);
+  offset += 4;
+  glbView.setUint32(offset, version, true);
+  offset += 4;
+  glbView.setUint32(offset, totalLength, true);
+  offset += 4;
+  
+  // JSON Chunk
+  glbView.setUint32(offset, jsonChunkLength, true);
+  offset += 4;
+  glbView.setUint32(offset, 0x4E4F534A, true); // "JSON"
+  offset += 4;
+  new Uint8Array(glbBuffer).set(paddedJsonBytes, offset);
+  offset += jsonChunkLength;
+
+  // BIN Chunk (optional)
+  if (binaryChunkLength > 0) {
+    glbView.setUint32(offset, binaryChunkLength, true);
+    offset += 4;
+    glbView.setUint32(offset, 0x004E4942, true); // "BIN" followed by null
+    offset += 4;
+    new Uint8Array(glbBuffer).set(paddedBinaryBytes, offset);
+  }
+  
+  return glbBuffer;
 }

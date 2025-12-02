@@ -1,5 +1,3 @@
-import 'react';
-
 // FIX: By turning this file into a module (with `export {}`) and using `declare global`,
 // we can correctly augment the global JSX namespace instead of overwriting it.
 // This fixes errors for all standard HTML elements (div, p, etc.) across the app
@@ -9,8 +7,8 @@ export {};
 declare global {
   namespace JSX {
     interface IntrinsicElements {
-      'model-viewer': React.DetailedHTMLProps<
-        React.HTMLAttributes<HTMLElement> & {
+      'model-viewer': import('react').DetailedHTMLProps<
+        import('react').HTMLAttributes<HTMLElement> & {
           src?: string | null;
           alt?: string;
           ar?: boolean;

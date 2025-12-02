@@ -1,7 +1,9 @@
+
 import type { Shape } from './gltfBuilder';
 import type { Geometry } from './geometry';
 import { createTree, createRock } from './stockModels';
 import { parseObj } from './objParser';
+import { parseGlb } from './glbParser';
 
 // GeoJSON type definitions for clarity
 type Point = [number, number];
@@ -23,15 +25,18 @@ interface FeatureCollection {
 }
 
 // Custom model type definitions
-interface CustomModelData {
-    obj: string;
+export interface CustomModelData {
+    obj?: string;
     mtl?: string;
+    objFileName?: string;
+    mtlFileName?: string;
+    glb?: ArrayBuffer;
+    glbFileName?: string;
 }
 export interface CustomModels {
     tree?: CustomModelData;
     rock?: CustomModelData;
 }
-
 
 /**
  * Triangulates a simple polygon using a basic fan algorithm from the first vertex.
@@ -63,6 +68,17 @@ function getCentroid(polygon: Point[]): Point {
         sumZ += p[1];
     }
     return [sumX / polygon.length, sumZ / polygon.length];
+}
+
+
+async function getModel(modelData: CustomModelData | undefined, stockModelFn: () => Geometry): Promise<Geometry> {
+    if (modelData?.glb) {
+        return parseGlb(modelData.glb);
+    }
+    if (modelData?.obj) {
+        return parseObj(modelData.obj, modelData.mtl);
+    }
+    return stockModelFn();
 }
 
 export async function parseGeoJsonToShapes(geojsonString: string, customModels: CustomModels = {}): Promise<Shape[]> {
@@ -101,8 +117,8 @@ export async function parseGeoJsonToShapes(geojsonString: string, customModels: 
     };
 
     // Pre-create models so they are not re-parsed for every feature
-    const treeModel = customModels.tree?.obj ? parseObj(customModels.tree.obj, customModels.tree.mtl) : createTree();
-    const rockModel = customModels.rock?.obj ? parseObj(customModels.rock.obj, customModels.rock.mtl) : createRock();
+    const treeModel = await getModel(customModels.tree, createTree);
+    const rockModel = await getModel(customModels.rock, createRock);
 
     for (const feature of geojson.features) {
         if (feature.geometry.type !== 'Polygon') continue;

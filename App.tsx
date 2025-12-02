@@ -1,16 +1,13 @@
+
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { buildGltf, type Shape } from './utils/gltfBuilder';
-import { parseGeoJsonToShapes, type CustomModels } from './utils/geojsonParser';
+import { buildGltf, buildGlb, type Shape } from './utils/gltfBuilder';
+import { parseGeoJsonToShapes, type CustomModels, type CustomModelData } from './utils/geojsonParser';
 import { DownloadIcon, UploadIcon, FolderOpenIcon, TrashIcon } from './components/icons';
 import { createCube, createPyramid, createSphere } from './utils/geometry';
 
-interface CustomModelFiles {
-  obj?: File;
-  mtl?: File;
-}
-
 const App: React.FC = () => {
   const [sceneUrl, setSceneUrl] = useState<string | null>(null);
+  const [sceneShapes, setSceneShapes] = useState<Shape[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [sceneTitle, setSceneTitle] = useState<string>('Loading Initial Scene...');
@@ -32,6 +29,7 @@ const App: React.FC = () => {
           { geometry: sphere, translation: [2.5, 0, 0], color: [0.2, 0.2, 1, 1] }, // Blue
         ];
         
+        setSceneShapes(shapes);
         const gltfJsonString = buildGltf(shapes);
         const blob = new Blob([gltfJsonString], { type: 'model/gltf+json' });
         const url = URL.createObjectURL(blob);
@@ -68,6 +66,7 @@ const App: React.FC = () => {
 
     setIsLoading(true);
     setError(null);
+    setSceneShapes([]);
     setSceneUrl(url => {
       if (url) URL.revokeObjectURL(url);
       return null;
@@ -80,7 +79,8 @@ const App: React.FC = () => {
       if (shapes.length === 0) {
           throw new Error("The GeoJSON file did not result in any visible 3D objects.");
       }
-
+      
+      setSceneShapes(shapes);
       const gltfJsonString = buildGltf(shapes);
       const blob = new Blob([gltfJsonString], { type: 'model/gltf+json' });
       const url = URL.createObjectURL(blob);
@@ -104,21 +104,42 @@ const App: React.FC = () => {
     fileInputRef.current?.click();
   };
 
-  const handleCustomModelChange = (type: 'tree' | 'rock', fileType: 'obj' | 'mtl', file: File | null) => {
+  const handleCustomModelChange = (type: 'tree' | 'rock', fileType: 'obj' | 'mtl' | 'glb', file: File | null) => {
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-        const text = e.target?.result as string;
-        setCustomModels(prev => ({
-            ...prev,
-            [type]: {
-                ...prev[type],
-                [fileType]: text,
-                [`${fileType}FileName`]: file.name
-            }
-        }));
-    };
-    reader.readAsText(file);
+
+    if (fileType === 'glb') {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const buffer = e.target?.result as ArrayBuffer;
+            setCustomModels(prev => ({
+                ...prev,
+                [type]: {
+                    glb: buffer,
+                    glbFileName: file.name
+                }
+            }));
+        };
+        reader.readAsArrayBuffer(file);
+    } else { // obj or mtl
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const text = e.target?.result as string;
+            setCustomModels(prev => {
+                const existing = { ...prev[type] };
+                delete existing.glb;
+                delete existing.glbFileName;
+                return {
+                    ...prev,
+                    [type]: {
+                        ...existing,
+                        [fileType]: text,
+                        [`${fileType}FileName`]: file.name
+                    }
+                }
+            });
+        };
+        reader.readAsText(file);
+    }
   };
   
   const clearCustomModel = (type: 'tree' | 'rock') => {
@@ -126,6 +147,31 @@ const App: React.FC = () => {
           const { [type]: _, ...rest } = prev;
           return rest;
       });
+  };
+
+  const handleDownload = (format: 'gltf' | 'glb') => {
+    if (!sceneShapes.length) return;
+
+    const triggerDownload = (blob: Blob, filename: string) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+
+    if (format === 'gltf') {
+        const gltfJsonString = buildGltf(sceneShapes);
+        const blob = new Blob([gltfJsonString], { type: 'model/gltf+json' });
+        triggerDownload(blob, 'scene.gltf');
+    } else {
+        const glbBuffer = buildGlb(sceneShapes);
+        const blob = new Blob([glbBuffer], { type: 'model/gltf-binary' });
+        triggerDownload(blob, 'scene.glb');
+    }
   };
 
   return (
@@ -172,15 +218,21 @@ const App: React.FC = () => {
             </div>
             
             {sceneUrl && !isLoading && !error && (
-                <div className="text-center mt-6">
-                    <a
-                        href={sceneUrl}
-                        download="scene.gltf"
-                        className="inline-flex items-center justify-center bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-6 rounded-lg transition-colors duration-300 shadow-md"
+                <div className="text-center mt-6 flex flex-col sm:flex-row justify-center items-center gap-4">
+                    <button
+                        onClick={() => handleDownload('gltf')}
+                        className="w-full sm:w-auto inline-flex items-center justify-center bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-6 rounded-lg transition-colors duration-300 shadow-md"
                     >
                         <DownloadIcon className="w-5 h-5 mr-2" />
-                        Download scene.gltf
-                    </a>
+                        Download .gltf
+                    </button>
+                    <button
+                        onClick={() => handleDownload('glb')}
+                        className="w-full sm:w-auto inline-flex items-center justify-center bg-cyan-600 hover:bg-cyan-700 text-white font-semibold py-2 px-6 rounded-lg transition-colors duration-300 shadow-md"
+                    >
+                        <DownloadIcon className="w-5 h-5 mr-2" />
+                        Download .glb
+                    </button>
                 </div>
             )}
         </main>
@@ -213,7 +265,7 @@ const App: React.FC = () => {
             {/* Custom Models */}
             <div className="bg-gray-800 border border-gray-700 rounded-2xl p-6">
                 <h2 className="text-2xl font-bold text-cyan-400 mb-3 text-center">Use Custom Models</h2>
-                <p className="text-gray-400 mb-6 text-center">Optionally, provide your own OBJ models for objects in the GeoJSON file.</p>
+                <p className="text-gray-400 mb-6 text-center">Optionally, provide your own models for objects in the GeoJSON file.</p>
                 <div className="space-y-6">
                     <CustomModelUploader
                         type="tree"
@@ -243,48 +295,92 @@ const App: React.FC = () => {
 
 interface CustomModelUploaderProps {
     type: 'tree' | 'rock';
-    modelData: any;
-    onChange: (type: 'tree' | 'rock', fileType: 'obj' | 'mtl', file: File | null) => void;
+    modelData?: CustomModelData;
+    onChange: (type: 'tree' | 'rock', fileType: 'obj' | 'mtl' | 'glb', file: File | null) => void;
     onClear: (type: 'tree' | 'rock') => void;
 }
 
 const CustomModelUploader: React.FC<CustomModelUploaderProps> = ({ type, modelData, onChange, onClear }) => {
     const objInputRef = useRef<HTMLInputElement>(null);
     const mtlInputRef = useRef<HTMLInputElement>(null);
+    const glbInputRef = useRef<HTMLInputElement>(null);
 
-    const hasModel = modelData?.objFileName;
+    const hasModel = modelData?.objFileName || modelData?.glbFileName;
 
     return (
         <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600">
             <div className="flex justify-between items-center mb-3">
                 <h3 className="text-lg font-semibold capitalize">{type} Model</h3>
                 {hasModel && (
-                    <button onClick={() => onClear(type)} className="text-gray-400 hover:text-red-400 transition-colors">
+                    <button onClick={() => onClear(type)} className="text-gray-400 hover:text-red-400 transition-colors" aria-label={`Clear ${type} model`}>
                         <TrashIcon className="w-5 h-5" />
                     </button>
                 )}
             </div>
             <div className="space-y-3">
-                {['obj', 'mtl'].map(fileType => (
-                    <div key={fileType}>
-                        <input
-                            type="file"
-                            accept={fileType === 'obj' ? '.obj' : '.mtl'}
-                            ref={fileType === 'obj' ? objInputRef : mtlInputRef}
-                            onChange={(e) => onChange(type, fileType as 'obj' | 'mtl', e.target.files?.[0] || null)}
-                            className="hidden"
-                        />
-                        <button
-                            onClick={() => (fileType === 'obj' ? objInputRef : mtlInputRef).current?.click()}
-                            className="w-full flex items-center bg-gray-600 hover:bg-gray-500 text-gray-200 text-sm font-semibold px-3 py-2 rounded-md transition-colors"
-                        >
-                            <FolderOpenIcon className="w-5 h-5 mr-3 text-cyan-400" />
-                            <span className="flex-grow text-left truncate">
-                                {modelData?.[`${fileType}FileName`] || `Upload .${fileType} file${fileType === 'mtl' ? ' (optional)' : ''}`}
-                            </span>
-                        </button>
-                    </div>
-                ))}
+                {/* OBJ Uploader */}
+                <div>
+                    <input
+                        type="file"
+                        accept=".obj"
+                        ref={objInputRef}
+                        onChange={(e) => onChange(type, 'obj', e.target.files?.[0] || null)}
+                        className="hidden"
+                    />
+                    <button
+                        onClick={() => objInputRef.current?.click()}
+                        className="w-full flex items-center bg-gray-600 hover:bg-gray-500 text-gray-200 text-sm font-semibold px-3 py-2 rounded-md transition-colors"
+                    >
+                        <FolderOpenIcon className="w-5 h-5 mr-3 text-cyan-400" />
+                        <span className="flex-grow text-left truncate">
+                            {modelData?.objFileName || 'Upload .obj file'}
+                        </span>
+                    </button>
+                </div>
+                {/* MTL Uploader */}
+                <div>
+                    <input
+                        type="file"
+                        accept=".mtl"
+                        ref={mtlInputRef}
+                        onChange={(e) => onChange(type, 'mtl', e.target.files?.[0] || null)}
+                        className="hidden"
+                    />
+                    <button
+                        onClick={() => mtlInputRef.current?.click()}
+                        className="w-full flex items-center bg-gray-600 hover:bg-gray-500 text-gray-200 text-sm font-semibold px-3 py-2 rounded-md transition-colors"
+                    >
+                        <FolderOpenIcon className="w-5 h-5 mr-3 text-cyan-400" />
+                        <span className="flex-grow text-left truncate">
+                            {modelData?.mtlFileName || 'Upload .mtl file (optional)'}
+                        </span>
+                    </button>
+                </div>
+
+                <div className="relative flex items-center py-1">
+                    <hr className="w-full border-t border-gray-600" />
+                    <span className="absolute left-1/2 -translate-x-1/2 bg-gray-700/50 px-2 text-xs text-gray-400">OR</span>
+                </div>
+
+                {/* GLB Uploader */}
+                <div>
+                    <input
+                        type="file"
+                        accept=".glb"
+                        ref={glbInputRef}
+                        onChange={(e) => onChange(type, 'glb', e.target.files?.[0] || null)}
+                        className="hidden"
+                    />
+                    <button
+                        onClick={() => glbInputRef.current?.click()}
+                        className="w-full flex items-center bg-gray-600 hover:bg-gray-500 text-gray-200 text-sm font-semibold px-3 py-2 rounded-md transition-colors"
+                    >
+                        <FolderOpenIcon className="w-5 h-5 mr-3 text-teal-400" />
+                        <span className="flex-grow text-left truncate">
+                            {modelData?.glbFileName || 'Upload .glb file'}
+                        </span>
+                    </button>
+                </div>
             </div>
         </div>
     );
