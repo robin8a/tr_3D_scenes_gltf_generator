@@ -39,6 +39,7 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
 
 /**
  * Parses a GLB file's ArrayBuffer to extract geometry from its first mesh.
+ * Merges all primitives in the first mesh to ensure the entire model is displayed.
  * @param arrayBuffer The ArrayBuffer of the .glb file.
  * @returns A Promise that resolves to a Geometry object.
  */
@@ -92,13 +93,16 @@ export async function parseGlb(arrayBuffer: ArrayBuffer): Promise<Geometry> {
         throw new Error('GLB file does not contain a binary buffer chunk.');
     }
     
-    // 4. Find the first mesh and primitive to extract data from
+    // 4. Find the first mesh
     const mesh = gltf.meshes?.[0];
-    const primitive = mesh?.primitives?.[0];
-    if (!primitive) {
-        throw new Error('GLB file does not contain a mesh with primitives.');
+    if (!mesh) {
+        throw new Error('GLB file does not contain any meshes.');
     }
-    
+    const primitives = mesh.primitives || [];
+    if (primitives.length === 0) {
+        throw new Error('Mesh has no primitives.');
+    }
+
     // 5. Helper function to get TypedArray data from an accessor
     const getAccessorData = (accessorIndex: number): TypedArray => {
         const accessor = gltf.accessors[accessorIndex];
@@ -123,12 +127,12 @@ export async function parseGlb(arrayBuffer: ArrayBuffer): Promise<Geometry> {
         // If data is tightly packed (no stride or stride equals element size)
         if (!byteStride || byteStride === elementSize) {
              // Create a slice to ensure alignment for TypedArray constructor
-             return new TypedArrayConstructor(binaryBuffer.slice(byteOffset, byteOffset + totalComponents * TypedArrayConstructor.BYTES_PER_ELEMENT));
+             return new TypedArrayConstructor(binaryBuffer!.slice(byteOffset, byteOffset + totalComponents * TypedArrayConstructor.BYTES_PER_ELEMENT));
         }
 
         // Handle interleaved data by copying elements one by one
         const output = new TypedArrayConstructor(totalComponents);
-        const bufferBytes = new Uint8Array(binaryBuffer); // View as bytes for manual stride math
+        const bufferBytes = new Uint8Array(binaryBuffer!); // View as bytes for manual stride math
         const outputBytes = new Uint8Array(output.buffer);
         const bytesPerElement = TypedArrayConstructor.BYTES_PER_ELEMENT;
         const bytesPerComponent = componentCount * bytesPerElement;
@@ -144,151 +148,204 @@ export async function parseGlb(arrayBuffer: ArrayBuffer): Promise<Geometry> {
         return output;
     };
 
-    // 6. Extract positions
-    const positionAccessorIndex = primitive.attributes.POSITION;
-    if (positionAccessorIndex === undefined) {
-        throw new Error('Mesh primitive is missing POSITION attribute.');
-    }
-    const positions = getAccessorData(positionAccessorIndex) as Float32Array;
+    // Containers for merged data
+    const allPositions: Float32Array[] = [];
+    const allNormals: Float32Array[] = [];
+    const allColors: Float32Array[] = [];
+    const allUVs: Float32Array[] = [];
+    const allIndices: Uint16Array[] = [];
     
-    // 7. Extract or generate normals
-    const normalAccessorIndex = primitive.attributes.NORMAL;
-    let normals: Float32Array;
-    
-    if (normalAccessorIndex !== undefined) {
-        normals = getAccessorData(normalAccessorIndex) as Float32Array;
-    } else {
-        // Generate zero normals if missing
-        normals = new Float32Array(positions.length); 
-    }
-    
-    // 8. Extract or generate indices
-    const indicesAccessorIndex = primitive.indices;
-    let indices: Uint16Array;
-    
-    if (indicesAccessorIndex !== undefined) {
-        const rawIndices = getAccessorData(indicesAccessorIndex);
-        if (rawIndices instanceof Uint16Array) {
-            indices = rawIndices;
-        } else {
-            // Convert other types (e.g. Uint8, Uint32) to Uint16
-            indices = new Uint16Array(rawIndices);
-        }
-    } else {
-        // Generate sequential indices for non-indexed geometry
+    let totalVertexCount = 0;
+    let totalIndexCount = 0;
+    let finalTexture: string | undefined = undefined;
+
+    // 6. Iterate over ALL primitives and collect data
+    for (const primitive of primitives) {
+        // --- Positions ---
+        const positionAccessorIndex = primitive.attributes.POSITION;
+        if (positionAccessorIndex === undefined) continue; // Skip primitives without positions
+        
+        const positions = getAccessorData(positionAccessorIndex) as Float32Array;
         const vertexCount = positions.length / 3;
-        indices = new Uint16Array(vertexCount);
-        for (let i = 0; i < vertexCount; i++) {
-            indices[i] = i;
-        }
-    }
+        allPositions.push(positions);
 
-    // 9. Extract colors
-    let colors: Float32Array | undefined;
-    const colorAccessorIndex = primitive.attributes.COLOR_0;
-
-    if (colorAccessorIndex !== undefined) {
-        const accessor = gltf.accessors[colorAccessorIndex];
-        const rawColors = getAccessorData(colorAccessorIndex);
-        const componentType = accessor.componentType;
-        const type = accessor.type;
-        const count = accessor.count;
-
-        if (componentType === 5126 && type === 'VEC3') {
-             colors = rawColors as Float32Array;
+        // --- Normals ---
+        const normalAccessorIndex = primitive.attributes.NORMAL;
+        let normals: Float32Array;
+        if (normalAccessorIndex !== undefined) {
+            normals = getAccessorData(normalAccessorIndex) as Float32Array;
         } else {
-             colors = new Float32Array(count * 3);
-             const isVec4 = type === 'VEC4';
-             const srcStride = isVec4 ? 4 : 3;
-             
-             let normFactor = 1.0;
-             if (componentType === 5121) normFactor = 255.0; // UNSIGNED_BYTE
-             if (componentType === 5123) normFactor = 65535.0; // UNSIGNED_SHORT
-             
-             for (let i = 0; i < count; i++) {
-                 colors[i * 3] = rawColors[i * srcStride] / normFactor;
-                 colors[i * 3 + 1] = rawColors[i * srcStride + 1] / normFactor;
-                 colors[i * 3 + 2] = rawColors[i * srcStride + 2] / normFactor;
-             }
+            normals = new Float32Array(positions.length); // Zero normals
         }
-    }
-    
-    // 10. Extract UVs
-    let uvs: Float32Array | undefined;
-    const uvAccessorIndex = primitive.attributes.TEXCOORD_0;
-    
-    if (uvAccessorIndex !== undefined) {
-        const accessor = gltf.accessors[uvAccessorIndex];
-        const rawUVs = getAccessorData(uvAccessorIndex);
-        const componentType = accessor.componentType;
-        const count = accessor.count;
-        
-        if (componentType === 5126) {
-            uvs = rawUVs as Float32Array;
+        allNormals.push(normals);
+
+        // --- Colors ---
+        let colors: Float32Array;
+        const colorAccessorIndex = primitive.attributes.COLOR_0;
+
+        if (colorAccessorIndex !== undefined) {
+            const accessor = gltf.accessors[colorAccessorIndex];
+            const rawColors = getAccessorData(colorAccessorIndex);
+            const componentType = accessor.componentType;
+            const type = accessor.type;
+            const count = accessor.count;
+
+            if (componentType === 5126 && type === 'VEC3') {
+                colors = rawColors as Float32Array;
+            } else {
+                colors = new Float32Array(count * 3);
+                const isVec4 = type === 'VEC4';
+                const srcStride = isVec4 ? 4 : 3;
+                
+                let normFactor = 1.0;
+                if (componentType === 5121) normFactor = 255.0;
+                if (componentType === 5123) normFactor = 65535.0;
+                
+                for (let i = 0; i < count; i++) {
+                    colors[i * 3] = rawColors[i * srcStride] / normFactor;
+                    colors[i * 3 + 1] = rawColors[i * srcStride + 1] / normFactor;
+                    colors[i * 3 + 2] = rawColors[i * srcStride + 2] / normFactor;
+                }
+            }
         } else {
-            // Convert normalized integers to floats
-            uvs = new Float32Array(count * 2);
-            let normFactor = 1.0;
-             if (componentType === 5121) normFactor = 255.0; // UNSIGNED_BYTE
-             if (componentType === 5123) normFactor = 65535.0; // UNSIGNED_SHORT
+            // Fallback: Use material base color
+            colors = new Float32Array(vertexCount * 3);
+            let r = 1, g = 1, b = 1;
+
+            if (primitive.material !== undefined) {
+                const material = gltf.materials?.[primitive.material];
+                const baseColorFactor = material?.pbrMetallicRoughness?.baseColorFactor;
+                if (baseColorFactor) {
+                    r = baseColorFactor[0];
+                    g = baseColorFactor[1];
+                    b = baseColorFactor[2];
+                }
+            }
             
-             for(let i=0; i < count * 2; i++) {
-                 uvs[i] = rawUVs[i] / normFactor;
-             }
+            for (let k = 0; k < vertexCount; k++) {
+                colors[k * 3] = r;
+                colors[k * 3 + 1] = g;
+                colors[k * 3 + 2] = b;
+            }
         }
-    }
-    
-    // 11. Extract Texture (if no colors found, or as an addition)
-    // We prioritize using the baseColorTexture if present.
-    let texture: string | undefined;
+        allColors.push(colors);
 
-    if (primitive.material !== undefined) {
-        const material = gltf.materials?.[primitive.material];
-        
-        // 11a. Fallback Color (if no vertex colors)
-        if (!colors) {
-            const baseColorFactor = material?.pbrMetallicRoughness?.baseColorFactor; // [r, g, b, a]
-            if (baseColorFactor && baseColorFactor.length >= 3) {
-                 const count = positions.length / 3;
-                 colors = new Float32Array(count * 3);
-                 const r = baseColorFactor[0];
-                 const g = baseColorFactor[1];
-                 const b = baseColorFactor[2];
-                 for (let i = 0; i < count; i++) {
-                     colors[i * 3] = r;
-                     colors[i * 3 + 1] = g;
-                     colors[i * 3 + 2] = b;
-                 }
+        // --- UVs ---
+        const uvAccessorIndex = primitive.attributes.TEXCOORD_0;
+        let uvs: Float32Array;
+        if (uvAccessorIndex !== undefined) {
+            const accessor = gltf.accessors[uvAccessorIndex];
+            const rawUVs = getAccessorData(uvAccessorIndex);
+            const componentType = accessor.componentType;
+            const count = accessor.count;
+            
+            if (componentType === 5126) {
+                uvs = rawUVs as Float32Array;
+            } else {
+                uvs = new Float32Array(count * 2);
+                let normFactor = 1.0;
+                if (componentType === 5121) normFactor = 255.0;
+                if (componentType === 5123) normFactor = 65535.0;
+                
+                for(let i=0; i < count * 2; i++) {
+                    uvs[i] = rawUVs[i] / normFactor;
+                }
+            }
+        } else {
+             uvs = new Float32Array(vertexCount * 2); // Zero UVs
+        }
+        allUVs.push(uvs);
+
+        // --- Indices ---
+        const indicesAccessorIndex = primitive.indices;
+        let indices: Uint16Array;
+        if (indicesAccessorIndex !== undefined) {
+            const rawIndices = getAccessorData(indicesAccessorIndex);
+            if (rawIndices instanceof Uint16Array) {
+                indices = rawIndices;
+            } else {
+                indices = new Uint16Array(rawIndices);
+            }
+        } else {
+            indices = new Uint16Array(vertexCount);
+            for (let i = 0; i < vertexCount; i++) {
+                indices[i] = i;
+            }
+        }
+        allIndices.push(indices);
+
+        // --- Texture ---
+        // We grab the texture from the first primitive that has one
+        if (!finalTexture && primitive.material !== undefined) {
+            const material = gltf.materials?.[primitive.material];
+            const textureInfo = material?.pbrMetallicRoughness?.baseColorTexture;
+            if (textureInfo) {
+                const textureIndex = textureInfo.index;
+                const tex = gltf.textures?.[textureIndex];
+                const imageIndex = tex?.source;
+                const image = gltf.images?.[imageIndex];
+                
+                if (image && image.bufferView !== undefined) {
+                    const bv = gltf.bufferViews[image.bufferView];
+                    const start = (bv.byteOffset || 0);
+                    const len = bv.byteLength;
+                    const imgBuffer = binaryBuffer!.slice(start, start + len);
+                    const base64 = arrayBufferToBase64(imgBuffer);
+                    const mime = image.mimeType || 'image/png';
+                    finalTexture = `data:${mime};base64,${base64}`;
+                } else if (image && image.uri && image.uri.startsWith('data:')) {
+                    finalTexture = image.uri;
+                }
             }
         }
 
-        // 11b. Texture Extraction
-        const textureInfo = material?.pbrMetallicRoughness?.baseColorTexture;
-        if (textureInfo) {
-             const textureIndex = textureInfo.index;
-             const tex = gltf.textures?.[textureIndex];
-             const imageIndex = tex?.source;
-             const image = gltf.images?.[imageIndex];
-             
-             if (image && image.bufferView !== undefined) {
-                  const bv = gltf.bufferViews[image.bufferView];
-                  const start = (bv.byteOffset || 0);
-                  const len = bv.byteLength;
-                  // Safe slice
-                  const imgBuffer = binaryBuffer.slice(start, start + len);
-                  const base64 = arrayBufferToBase64(imgBuffer);
-                  const mime = image.mimeType || 'image/png';
-                  texture = `data:${mime};base64,${base64}`;
-             } else if (image && image.uri) {
-                  // If embedded as data URI directly
-                  if (image.uri.startsWith('data:')) {
-                      texture = image.uri;
-                  }
-             }
-        }
+        totalVertexCount += vertexCount;
+        totalIndexCount += indices.length;
     }
-    
-    return { positions, normals, indices, colors, uvs, texture };
+
+    // 7. Merge all data into single TypedArrays
+    const mergedPositions = new Float32Array(totalVertexCount * 3);
+    const mergedNormals = new Float32Array(totalVertexCount * 3);
+    const mergedColors = new Float32Array(totalVertexCount * 3);
+    const mergedUVs = new Float32Array(totalVertexCount * 2);
+    const mergedIndices = new Uint16Array(totalIndexCount);
+
+    let vOffset = 0; // Vertex element offset (float count)
+    let iOffset = 0; // Index offset (int count)
+    let indexBase = 0; // Base value to add to indices
+
+    for (let i = 0; i < allPositions.length; i++) {
+        const pos = allPositions[i];
+        const norm = allNormals[i];
+        const col = allColors[i];
+        const uv = allUVs[i];
+        const ind = allIndices[i];
+
+        mergedPositions.set(pos, vOffset);
+        mergedNormals.set(norm, vOffset);
+        mergedColors.set(col, vOffset);
+        // UVs are 2 components per vertex, vOffset is 3. We track uvOffset separately or calculate
+        mergedUVs.set(uv, (vOffset / 3) * 2);
+
+        // Update indices: add current indexBase to every index
+        for (let j = 0; j < ind.length; j++) {
+            mergedIndices[iOffset + j] = ind[j] + indexBase;
+        }
+
+        const vertexCount = pos.length / 3;
+        vOffset += pos.length;
+        iOffset += ind.length;
+        indexBase += vertexCount;
+    }
+
+    return { 
+        positions: mergedPositions, 
+        normals: mergedNormals, 
+        indices: mergedIndices, 
+        colors: mergedColors, 
+        uvs: mergedUVs, 
+        texture: finalTexture 
+    };
 }
 
 // A generic TypedArray type for the helper function
