@@ -27,6 +27,16 @@ const TYPE_COMPONENT_COUNT_MAP: { [key: string]: number } = {
   'MAT4': 16,
 };
 
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+}
+
 /**
  * Parses a GLB file's ArrayBuffer to extract geometry from its first mesh.
  * @param arrayBuffer The ArrayBuffer of the .glb file.
@@ -112,15 +122,24 @@ export async function parseGlb(arrayBuffer: ArrayBuffer): Promise<Geometry> {
 
         // If data is tightly packed (no stride or stride equals element size)
         if (!byteStride || byteStride === elementSize) {
-             return new TypedArrayConstructor(binaryBuffer, byteOffset, totalComponents);
+             // Create a slice to ensure alignment for TypedArray constructor
+             return new TypedArrayConstructor(binaryBuffer.slice(byteOffset, byteOffset + totalComponents * TypedArrayConstructor.BYTES_PER_ELEMENT));
         }
 
         // Handle interleaved data by copying elements one by one
         const output = new TypedArrayConstructor(totalComponents);
+        const bufferBytes = new Uint8Array(binaryBuffer); // View as bytes for manual stride math
+        const outputBytes = new Uint8Array(output.buffer);
+        const bytesPerElement = TypedArrayConstructor.BYTES_PER_ELEMENT;
+        const bytesPerComponent = componentCount * bytesPerElement;
+
         for (let i = 0; i < elementCount; i++) {
-            const pos = byteOffset + i * byteStride;
-            const elementView = new TypedArrayConstructor(binaryBuffer, pos, componentCount);
-            output.set(elementView, i * componentCount);
+            const srcPos = byteOffset + i * byteStride;
+            const destPos = i * bytesPerComponent;
+            // Copy bytes directly to avoid alignment issues with the source
+            for (let j = 0; j < bytesPerComponent; j++) {
+                outputBytes[destPos + j] = bufferBytes[srcPos + j];
+            }
         }
         return output;
     };
@@ -153,7 +172,6 @@ export async function parseGlb(arrayBuffer: ArrayBuffer): Promise<Geometry> {
             indices = rawIndices;
         } else {
             // Convert other types (e.g. Uint8, Uint32) to Uint16
-            // Note: Large models (>65535 vertices) with Uint32 indices will have issues here due to truncation
             indices = new Uint16Array(rawIndices);
         }
     } else {
@@ -164,8 +182,113 @@ export async function parseGlb(arrayBuffer: ArrayBuffer): Promise<Geometry> {
             indices[i] = i;
         }
     }
+
+    // 9. Extract colors
+    let colors: Float32Array | undefined;
+    const colorAccessorIndex = primitive.attributes.COLOR_0;
+
+    if (colorAccessorIndex !== undefined) {
+        const accessor = gltf.accessors[colorAccessorIndex];
+        const rawColors = getAccessorData(colorAccessorIndex);
+        const componentType = accessor.componentType;
+        const type = accessor.type;
+        const count = accessor.count;
+
+        if (componentType === 5126 && type === 'VEC3') {
+             colors = rawColors as Float32Array;
+        } else {
+             colors = new Float32Array(count * 3);
+             const isVec4 = type === 'VEC4';
+             const srcStride = isVec4 ? 4 : 3;
+             
+             let normFactor = 1.0;
+             if (componentType === 5121) normFactor = 255.0; // UNSIGNED_BYTE
+             if (componentType === 5123) normFactor = 65535.0; // UNSIGNED_SHORT
+             
+             for (let i = 0; i < count; i++) {
+                 colors[i * 3] = rawColors[i * srcStride] / normFactor;
+                 colors[i * 3 + 1] = rawColors[i * srcStride + 1] / normFactor;
+                 colors[i * 3 + 2] = rawColors[i * srcStride + 2] / normFactor;
+             }
+        }
+    }
     
-    return { positions, normals, indices, colors: undefined };
+    // 10. Extract UVs
+    let uvs: Float32Array | undefined;
+    const uvAccessorIndex = primitive.attributes.TEXCOORD_0;
+    
+    if (uvAccessorIndex !== undefined) {
+        const accessor = gltf.accessors[uvAccessorIndex];
+        const rawUVs = getAccessorData(uvAccessorIndex);
+        const componentType = accessor.componentType;
+        const count = accessor.count;
+        
+        if (componentType === 5126) {
+            uvs = rawUVs as Float32Array;
+        } else {
+            // Convert normalized integers to floats
+            uvs = new Float32Array(count * 2);
+            let normFactor = 1.0;
+             if (componentType === 5121) normFactor = 255.0; // UNSIGNED_BYTE
+             if (componentType === 5123) normFactor = 65535.0; // UNSIGNED_SHORT
+            
+             for(let i=0; i < count * 2; i++) {
+                 uvs[i] = rawUVs[i] / normFactor;
+             }
+        }
+    }
+    
+    // 11. Extract Texture (if no colors found, or as an addition)
+    // We prioritize using the baseColorTexture if present.
+    let texture: string | undefined;
+
+    if (primitive.material !== undefined) {
+        const material = gltf.materials?.[primitive.material];
+        
+        // 11a. Fallback Color (if no vertex colors)
+        if (!colors) {
+            const baseColorFactor = material?.pbrMetallicRoughness?.baseColorFactor; // [r, g, b, a]
+            if (baseColorFactor && baseColorFactor.length >= 3) {
+                 const count = positions.length / 3;
+                 colors = new Float32Array(count * 3);
+                 const r = baseColorFactor[0];
+                 const g = baseColorFactor[1];
+                 const b = baseColorFactor[2];
+                 for (let i = 0; i < count; i++) {
+                     colors[i * 3] = r;
+                     colors[i * 3 + 1] = g;
+                     colors[i * 3 + 2] = b;
+                 }
+            }
+        }
+
+        // 11b. Texture Extraction
+        const textureInfo = material?.pbrMetallicRoughness?.baseColorTexture;
+        if (textureInfo) {
+             const textureIndex = textureInfo.index;
+             const tex = gltf.textures?.[textureIndex];
+             const imageIndex = tex?.source;
+             const image = gltf.images?.[imageIndex];
+             
+             if (image && image.bufferView !== undefined) {
+                  const bv = gltf.bufferViews[image.bufferView];
+                  const start = (bv.byteOffset || 0);
+                  const len = bv.byteLength;
+                  // Safe slice
+                  const imgBuffer = binaryBuffer.slice(start, start + len);
+                  const base64 = arrayBufferToBase64(imgBuffer);
+                  const mime = image.mimeType || 'image/png';
+                  texture = `data:${mime};base64,${base64}`;
+             } else if (image && image.uri) {
+                  // If embedded as data URI directly
+                  if (image.uri.startsWith('data:')) {
+                      texture = image.uri;
+                  }
+             }
+        }
+    }
+    
+    return { positions, normals, indices, colors, uvs, texture };
 }
 
 // A generic TypedArray type for the helper function

@@ -4,6 +4,8 @@ export interface Geometry {
   normals: Float32Array;
   indices: Uint16Array;
   colors?: Float32Array;
+  uvs?: Float32Array;
+  texture?: string; // Data URI of the texture image
 }
 
 export function createCube(size = 1): Geometry {
@@ -38,6 +40,21 @@ export function createCube(size = 1): Geometry {
     -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0,
   ]);
 
+  const uvs = new Float32Array([
+      // Front
+      0, 0, 1, 0, 1, 1, 0, 1,
+      // Back
+      1, 0, 0, 0, 0, 1, 1, 1,
+      // Top
+      0, 1, 0, 0, 1, 0, 1, 1,
+      // Bottom
+      0, 0, 1, 0, 1, 1, 0, 1,
+      // Right
+      0, 0, 1, 0, 1, 1, 0, 1,
+      // Left
+      0, 0, 1, 0, 1, 1, 0, 1,
+  ]);
+
   const indices = new Uint16Array([
     0, 1, 2, 0, 2, 3, // front
     4, 5, 6, 4, 6, 7, // back
@@ -47,7 +64,7 @@ export function createCube(size = 1): Geometry {
     20, 21, 22, 20, 22, 23, // left
   ]);
 
-  return { positions, normals, indices };
+  return { positions, normals, indices, uvs };
 }
 
 export function createPyramid(baseSize = 1, height = 1): Geometry {
@@ -61,7 +78,7 @@ export function createPyramid(baseSize = 1, height = 1): Geometry {
     0, h, 0,
   ]);
 
-  const normals = new Float32Array(5 * 3); // Placeholder, proper normals are complex
+  const normals = new Float32Array(5 * 3); 
 
   const indices = new Uint16Array([
     // Base
@@ -73,21 +90,24 @@ export function createPyramid(baseSize = 1, height = 1): Geometry {
     3, 0, 4
   ]);
 
-  // A simple approach for normals (not perfect lighting)
   // Base normal
   normals.set([0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1, 0], 0);
-  // Apex normal (average of side faces) - simplified to point up
+  // Apex normal
   normals.set([0, 1, 0], 12);
   
-  // A more accurate normal calculation would be needed for perfect lighting,
-  // but for model-viewer compatibility, this is sufficient.
+  // Basic UVs for base
+  const uvs = new Float32Array([
+      0, 0, 1, 0, 1, 1, 0, 1, // Base
+      0.5, 0.5 // Apex
+  ]);
 
-  return { positions, normals, indices };
+  return { positions, normals, indices, uvs };
 }
 
 export function createSphere(radius = 1, sectorCount = 36, stackCount = 18): Geometry {
     const positions: number[] = [];
     const normals: number[] = [];
+    const uvs: number[] = [];
     const indices: number[] = [];
 
     for (let i = 0; i <= stackCount; ++i) {
@@ -110,6 +130,10 @@ export function createSphere(radius = 1, sectorCount = 36, stackCount = 18): Geo
             const ny = y / radius;
             const nz = z / radius;
             normals.push(nx, ny, nz);
+
+            const u = 1 - (j / sectorCount);
+            const v = 1 - (i / stackCount);
+            uvs.push(u, v);
         }
     }
 
@@ -126,6 +150,7 @@ export function createSphere(radius = 1, sectorCount = 36, stackCount = 18): Geo
     return {
         positions: new Float32Array(positions),
         normals: new Float32Array(normals),
-        indices: new Uint16Array(indices)
+        indices: new Uint16Array(indices),
+        uvs: new Float32Array(uvs)
     };
 }

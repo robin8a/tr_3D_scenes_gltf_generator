@@ -23,31 +23,42 @@ function generateGltfParts(shapes: Shape[]): { gltf: any; combinedBuffer: ArrayB
   const meshes: any[] = [];
   const nodes: any[] = [];
   const materials: any[] = [];
+  const textures: any[] = [];
+  const images: any[] = [];
+  const samplers: any[] = [{ magFilter: 9729, minFilter: 9987, wrapS: 10497, wrapT: 10497 }]; // Default sampler
+  
   const materialMap = new Map<string, number>();
+  const textureMap = new Map<string, number>();
 
   // --- 1. Aggregate all geometry data into single arrays ---
   const totalPosElements = shapes.reduce((acc, s) => acc + s.geometry.positions.length, 0);
   const totalNormElements = shapes.reduce((acc, s) => acc + s.geometry.normals.length, 0);
   const totalColorElements = shapes.reduce((acc, s) => acc + (s.geometry.colors ? s.geometry.colors.length : 0), 0);
+  const totalUVElements = shapes.reduce((acc, s) => acc + (s.geometry.uvs ? s.geometry.uvs.length : 0), 0);
   const totalIndexElements = shapes.reduce((acc, s) => acc + s.geometry.indices.length, 0);
 
   const allPositions = new Float32Array(totalPosElements);
   const allNormals = new Float32Array(totalNormElements);
   const allColors = new Float32Array(totalColorElements);
+  const allUVs = new Float32Array(totalUVElements);
   const allIndices = new Uint16Array(totalIndexElements);
 
-  let pOffset = 0, nOffset = 0, cOffset = 0, iOffset = 0;
+  let pOffset = 0, nOffset = 0, cOffset = 0, uvOffset = 0, iOffset = 0;
   for (const shape of shapes) {
     allPositions.set(shape.geometry.positions, pOffset);
     allNormals.set(shape.geometry.normals, nOffset);
     if (shape.geometry.colors) {
       allColors.set(shape.geometry.colors, cOffset);
     }
+    if (shape.geometry.uvs) {
+      allUVs.set(shape.geometry.uvs, uvOffset);
+    }
     allIndices.set(shape.geometry.indices, iOffset);
 
     pOffset += shape.geometry.positions.length;
     nOffset += shape.geometry.normals.length;
     cOffset += shape.geometry.colors ? shape.geometry.colors.length : 0;
+    uvOffset += shape.geometry.uvs ? shape.geometry.uvs.length : 0;
     iOffset += shape.geometry.indices.length;
   }
   
@@ -55,38 +66,93 @@ function generateGltfParts(shapes: Shape[]): { gltf: any; combinedBuffer: ArrayB
   const posBufferByteLength = allPositions.byteLength;
   const normBufferByteLength = allNormals.byteLength;
   const colorBufferByteLength = allColors.byteLength;
+  const uvBufferByteLength = allUVs.byteLength;
   const indexBufferByteLength = allIndices.byteLength;
 
-  const totalByteLength = posBufferByteLength + normBufferByteLength + colorBufferByteLength + indexBufferByteLength;
+  const totalByteLength = posBufferByteLength + normBufferByteLength + colorBufferByteLength + uvBufferByteLength + indexBufferByteLength;
   const combinedBuffer = new ArrayBuffer(totalByteLength);
   const combinedBufferView = new Uint8Array(combinedBuffer);
 
   let byteOffset = 0;
+  
+  // Positions (view 0)
   combinedBufferView.set(new Uint8Array(allPositions.buffer), byteOffset);
   bufferViews.push({ buffer: 0, byteOffset, byteLength: posBufferByteLength, target: 34962 });
   byteOffset += posBufferByteLength;
   
+  // Normals (view 1)
   combinedBufferView.set(new Uint8Array(allNormals.buffer), byteOffset);
   bufferViews.push({ buffer: 0, byteOffset, byteLength: normBufferByteLength, target: 34962 });
   byteOffset += normBufferByteLength;
 
+  // Colors (view 2 - optional)
   if (colorBufferByteLength > 0) {
     combinedBufferView.set(new Uint8Array(allColors.buffer), byteOffset);
     bufferViews.push({ buffer: 0, byteOffset, byteLength: colorBufferByteLength, target: 34962 });
     byteOffset += colorBufferByteLength;
   }
+
+  // UVs (view 3 - optional)
+  let uvBufferViewIdx = -1;
+  if (uvBufferByteLength > 0) {
+    uvBufferViewIdx = bufferViews.length;
+    combinedBufferView.set(new Uint8Array(allUVs.buffer), byteOffset);
+    bufferViews.push({ buffer: 0, byteOffset, byteLength: uvBufferByteLength, target: 34962 });
+    byteOffset += uvBufferByteLength;
+  }
   
+  // Indices (view 4 - last)
+  const indexBufferViewIdx = bufferViews.length;
   combinedBufferView.set(new Uint8Array(allIndices.buffer), byteOffset);
   bufferViews.push({ buffer: 0, byteOffset, byteLength: indexBufferByteLength, target: 34963 });
 
   // --- 3. Create materials, accessors, and meshes for each shape ---
-  let pElementOffset = 0, nElementOffset = 0, cElementOffset = 0, iElementOffset = 0;
+  let pElementOffset = 0, nElementOffset = 0, cElementOffset = 0, uvElementOffset = 0, iElementOffset = 0;
+  
   shapes.forEach((shape, shapeIndex) => {
-    const { positions, normals, indices, colors } = shape.geometry;
+    const { positions, normals, indices, colors, uvs, texture } = shape.geometry;
 
     // Manage Materials
     let materialIndex: number;
-    if (colors && colors.length > 0) {
+    let textureIndex: number | undefined;
+
+    // 3a. Handle Texture
+    if (texture) {
+        if (!textureMap.has(texture)) {
+            const imageIdx = images.length;
+            images.push({ uri: texture, mimeType: "image/png" }); // Assuming PNG or handled by browser
+            
+            const texIdx = textures.length;
+            textures.push({ sampler: 0, source: imageIdx });
+            textureMap.set(texture, texIdx);
+            textureIndex = texIdx;
+        } else {
+            textureIndex = textureMap.get(texture)!;
+        }
+    }
+
+    // 3b. Create Material
+    if (textureIndex !== undefined) {
+        // Texture Material
+        const matKey = `TEX_${textureIndex}`;
+        if (!materialMap.has(matKey)) {
+            materialIndex = materials.length;
+            materials.push({
+                pbrMetallicRoughness: {
+                    baseColorTexture: { index: textureIndex },
+                    baseColorFactor: [1.0, 1.0, 1.0, 1.0],
+                    metallicFactor: 0.0,
+                    roughnessFactor: 1.0
+                },
+                name: `Material_Texture_${textureIndex}`,
+                doubleSided: true
+            });
+            materialMap.set(matKey, materialIndex);
+        } else {
+            materialIndex = materialMap.get(matKey)!;
+        }
+    } else if (colors && colors.length > 0) {
+        // Vertex Color Material
         const vertexColorKey = "##VERTEX_COLORS##";
         if (!materialMap.has(vertexColorKey)) {
             materialIndex = materials.length;
@@ -100,6 +166,7 @@ function generateGltfParts(shapes: Shape[]): { gltf: any; combinedBuffer: ArrayB
             materialIndex = materialMap.get(vertexColorKey)!;
         }
     } else {
+        // Flat Color Material
         const defaultColor = [0.8, 0.8, 0.8, 1.0];
         const colorKey = JSON.stringify(shape.color || defaultColor);
         if (!materialMap.has(colorKey)) {
@@ -123,27 +190,36 @@ function generateGltfParts(shapes: Shape[]): { gltf: any; combinedBuffer: ArrayB
       maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); maxZ = Math.max(maxZ, z);
     }
     
+    // Position Accessor
     const posAccessorIdx = accessors.length;
     accessors.push({ bufferView: 0, byteOffset: pElementOffset * Float32Array.BYTES_PER_ELEMENT, componentType: 5126, count: positions.length / 3, type: 'VEC3', min: [minX, minY, minZ], max: [maxX, maxY, maxZ] });
     
+    // Normal Accessor
     const normAccessorIdx = accessors.length;
     accessors.push({ bufferView: 1, byteOffset: nElementOffset * Float32Array.BYTES_PER_ELEMENT, componentType: 5126, count: normals.length / 3, type: 'VEC3' });
     
+    // Color Accessor
     let colorAccessorIdx = -1;
     if (colors && colors.length > 0) {
       colorAccessorIdx = accessors.length;
       accessors.push({ bufferView: 2, byteOffset: cElementOffset * Float32Array.BYTES_PER_ELEMENT, componentType: 5126, count: colors.length / 3, type: 'VEC3' });
     }
+
+    // UV Accessor
+    let uvAccessorIdx = -1;
+    if (uvs && uvs.length > 0 && uvBufferViewIdx !== -1) {
+        uvAccessorIdx = accessors.length;
+        accessors.push({ bufferView: uvBufferViewIdx, byteOffset: uvElementOffset * Float32Array.BYTES_PER_ELEMENT, componentType: 5126, count: uvs.length / 2, type: 'VEC2' });
+    }
     
+    // Index Accessor
     const indexAccessorIdx = accessors.length;
-    const indexBvIndex = colorBufferByteLength > 0 ? 3 : 2;
-    accessors.push({ bufferView: indexBvIndex, byteOffset: iElementOffset * Uint16Array.BYTES_PER_ELEMENT, componentType: 5123, count: indices.length, type: 'SCALAR' });
+    accessors.push({ bufferView: indexBufferViewIdx, byteOffset: iElementOffset * Uint16Array.BYTES_PER_ELEMENT, componentType: 5123, count: indices.length, type: 'SCALAR' });
 
     // Mesh Primitive
     const attributes: { [key: string]: number } = { POSITION: posAccessorIdx, NORMAL: normAccessorIdx };
-    if (colorAccessorIdx !== -1) {
-      attributes.COLOR_0 = colorAccessorIdx;
-    }
+    if (colorAccessorIdx !== -1) attributes.COLOR_0 = colorAccessorIdx;
+    if (uvAccessorIdx !== -1) attributes.TEXCOORD_0 = uvAccessorIdx;
     
     meshes.push({
       primitives: [{
@@ -156,10 +232,11 @@ function generateGltfParts(shapes: Shape[]): { gltf: any; combinedBuffer: ArrayB
     
     nodes.push({ mesh: shapeIndex, translation: shape.translation });
     
-    // Update element offsets for next shape
+    // Update element offsets
     pElementOffset += positions.length;
     nElementOffset += normals.length;
     cElementOffset += colors ? colors.length : 0;
+    uvElementOffset += uvs ? uvs.length : 0;
     iElementOffset += indices.length;
   });
 
@@ -173,6 +250,9 @@ function generateGltfParts(shapes: Shape[]): { gltf: any; combinedBuffer: ArrayB
     accessors,
     bufferViews,
     materials,
+    textures,
+    images,
+    samplers,
     buffers: [{
       byteLength: totalByteLength,
     }],
