@@ -62,15 +62,20 @@ export async function parseGlb(arrayBuffer: ArrayBuffer): Promise<Geometry> {
 
     // 3. Read BIN chunk
     let binaryBuffer: ArrayBuffer | undefined;
-    if (chunkOffset < dataView.byteLength) {
-        const binChunkLength = dataView.getUint32(chunkOffset, true);
+    
+    // Iterate through remaining chunks to find BIN
+    while (chunkOffset < dataView.byteLength) {
+        const chunkLength = dataView.getUint32(chunkOffset, true);
         chunkOffset += 4;
-        const binChunkType = dataView.getUint32(chunkOffset, true);
+        const chunkType = dataView.getUint32(chunkOffset, true);
         chunkOffset += 4;
-        if (binChunkType !== CHUNK_TYPE.BIN) {
-            throw new Error('Invalid GLB: Second chunk must be BIN.');
+
+        if (chunkType === CHUNK_TYPE.BIN) {
+            binaryBuffer = arrayBuffer.slice(chunkOffset, chunkOffset + chunkLength);
+            break; // Found it
         }
-        binaryBuffer = arrayBuffer.slice(chunkOffset, chunkOffset + binChunkLength);
+        
+        chunkOffset += chunkLength;
     }
     
     if (!binaryBuffer) {
@@ -88,37 +93,77 @@ export async function parseGlb(arrayBuffer: ArrayBuffer): Promise<Geometry> {
     const getAccessorData = (accessorIndex: number): TypedArray => {
         const accessor = gltf.accessors[accessorIndex];
         const bufferView = gltf.bufferViews[accessor.bufferView];
-        const TypedArray = COMPONENT_TYPE_MAP[accessor.componentType];
-        const componentCount = TYPE_COMPONENT_COUNT_MAP[accessor.type];
-        const byteOffset = (bufferView.byteOffset || 0) + (accessor.byteOffset || 0);
-        const elementCount = accessor.count;
-        const totalComponents = elementCount * componentCount;
+        const TypedArrayConstructor = COMPONENT_TYPE_MAP[accessor.componentType];
         
-        if (!TypedArray) {
+        if (!TypedArrayConstructor) {
             throw new Error(`Unsupported component type: ${accessor.componentType}`);
         }
 
-        return new TypedArray(binaryBuffer, byteOffset, totalComponents);
+        const componentCount = TYPE_COMPONENT_COUNT_MAP[accessor.type] || 1;
+        const elementCount = accessor.count;
+        const totalComponents = elementCount * componentCount;
+        
+        // Offset relative to the buffer (which we extracted as binaryBuffer)
+        const byteOffset = (bufferView.byteOffset || 0) + (accessor.byteOffset || 0);
+        
+        // Handle byteStride for interleaved data
+        const byteStride = bufferView.byteStride;
+        const elementSize = componentCount * TypedArrayConstructor.BYTES_PER_ELEMENT;
+
+        // If data is tightly packed (no stride or stride equals element size)
+        if (!byteStride || byteStride === elementSize) {
+             return new TypedArrayConstructor(binaryBuffer, byteOffset, totalComponents);
+        }
+
+        // Handle interleaved data by copying elements one by one
+        const output = new TypedArrayConstructor(totalComponents);
+        for (let i = 0; i < elementCount; i++) {
+            const pos = byteOffset + i * byteStride;
+            const elementView = new TypedArrayConstructor(binaryBuffer, pos, componentCount);
+            output.set(elementView, i * componentCount);
+        }
+        return output;
     };
 
-    // 6. Extract positions, normals, and indices
+    // 6. Extract positions
     const positionAccessorIndex = primitive.attributes.POSITION;
-    const normalAccessorIndex = primitive.attributes.NORMAL;
-    const indicesAccessorIndex = primitive.indices;
-
-    if (positionAccessorIndex === undefined || normalAccessorIndex === undefined || indicesAccessorIndex === undefined) {
-        throw new Error('Mesh primitive is missing POSITION, NORMAL, or indices attributes.');
+    if (positionAccessorIndex === undefined) {
+        throw new Error('Mesh primitive is missing POSITION attribute.');
     }
-
     const positions = getAccessorData(positionAccessorIndex) as Float32Array;
-    const normals = getAccessorData(normalAccessorIndex) as Float32Array;
     
-    const rawIndices = getAccessorData(indicesAccessorIndex);
-    // Our internal format uses Uint16Array, so convert if necessary.
-    // This is a simplification; large models might overflow, but it's suitable for this app.
-    const indices = rawIndices instanceof Uint16Array ? rawIndices : new Uint16Array(rawIndices);
+    // 7. Extract or generate normals
+    const normalAccessorIndex = primitive.attributes.NORMAL;
+    let normals: Float32Array;
     
-    // Vertex colors are ignored for simplicity; the main material will be used.
+    if (normalAccessorIndex !== undefined) {
+        normals = getAccessorData(normalAccessorIndex) as Float32Array;
+    } else {
+        // Generate zero normals if missing
+        normals = new Float32Array(positions.length); 
+    }
+    
+    // 8. Extract or generate indices
+    const indicesAccessorIndex = primitive.indices;
+    let indices: Uint16Array;
+    
+    if (indicesAccessorIndex !== undefined) {
+        const rawIndices = getAccessorData(indicesAccessorIndex);
+        if (rawIndices instanceof Uint16Array) {
+            indices = rawIndices;
+        } else {
+            // Convert other types (e.g. Uint8, Uint32) to Uint16
+            // Note: Large models (>65535 vertices) with Uint32 indices will have issues here due to truncation
+            indices = new Uint16Array(rawIndices);
+        }
+    } else {
+        // Generate sequential indices for non-indexed geometry
+        const vertexCount = positions.length / 3;
+        indices = new Uint16Array(vertexCount);
+        for (let i = 0; i < vertexCount; i++) {
+            indices[i] = i;
+        }
+    }
     
     return { positions, normals, indices, colors: undefined };
 }
