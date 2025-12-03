@@ -1,11 +1,19 @@
 
+export interface GeometryPrimitive {
+  indicesOffset: number; // Start index in the main indices array
+  indicesCount: number;  // Number of indices for this primitive
+  texture?: string;      // Specific texture for this primitive
+  color?: [number, number, number, number]; // Specific base color
+}
+
 export interface Geometry {
   positions: Float32Array;
   normals: Float32Array;
   indices: Uint16Array;
   colors?: Float32Array;
   uvs?: Float32Array;
-  texture?: string; // Data URI of the texture image
+  texture?: string; // Legacy/Fallback global texture
+  primitives?: GeometryPrimitive[]; // Breakdown of geometry into material groups
 }
 
 export function createCube(size = 1): Geometry {

@@ -1,5 +1,5 @@
 
-import type { Geometry } from './geometry';
+import type { Geometry, GeometryPrimitive } from './geometry';
 
 const CHUNK_TYPE = {
   JSON: 0x4E4F534A,
@@ -39,9 +39,7 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
 
 /**
  * Parses a GLB file's ArrayBuffer to extract geometry from its first mesh.
- * Merges all primitives in the first mesh to ensure the entire model is displayed.
- * @param arrayBuffer The ArrayBuffer of the .glb file.
- * @returns A Promise that resolves to a Geometry object.
+ * Maintains primitive structure to support multi-material models (e.g. Tree Trunk vs Leaves).
  */
 export async function parseGlb(arrayBuffer: ArrayBuffer): Promise<Geometry> {
     const dataView = new DataView(arrayBuffer);
@@ -126,13 +124,12 @@ export async function parseGlb(arrayBuffer: ArrayBuffer): Promise<Geometry> {
 
         // If data is tightly packed (no stride or stride equals element size)
         if (!byteStride || byteStride === elementSize) {
-             // Create a slice to ensure alignment for TypedArray constructor
              return new TypedArrayConstructor(binaryBuffer!.slice(byteOffset, byteOffset + totalComponents * TypedArrayConstructor.BYTES_PER_ELEMENT));
         }
 
-        // Handle interleaved data by copying elements one by one
+        // Handle interleaved data
         const output = new TypedArrayConstructor(totalComponents);
-        const bufferBytes = new Uint8Array(binaryBuffer!); // View as bytes for manual stride math
+        const bufferBytes = new Uint8Array(binaryBuffer!);
         const outputBytes = new Uint8Array(output.buffer);
         const bytesPerElement = TypedArrayConstructor.BYTES_PER_ELEMENT;
         const bytesPerComponent = componentCount * bytesPerElement;
@@ -140,7 +137,6 @@ export async function parseGlb(arrayBuffer: ArrayBuffer): Promise<Geometry> {
         for (let i = 0; i < elementCount; i++) {
             const srcPos = byteOffset + i * byteStride;
             const destPos = i * bytesPerComponent;
-            // Copy bytes directly to avoid alignment issues with the source
             for (let j = 0; j < bytesPerComponent; j++) {
                 outputBytes[destPos + j] = bufferBytes[srcPos + j];
             }
@@ -155,15 +151,17 @@ export async function parseGlb(arrayBuffer: ArrayBuffer): Promise<Geometry> {
     const allUVs: Float32Array[] = [];
     const allIndices: Uint16Array[] = [];
     
+    const geometryPrimitives: GeometryPrimitive[] = [];
+
     let totalVertexCount = 0;
     let totalIndexCount = 0;
-    let finalTexture: string | undefined = undefined;
+    let hasAlphaColor = false; // Track if we encounter any 4-component colors
 
-    // 6. Iterate over ALL primitives and collect data
+    // 6. Iterate over ALL primitives
     for (const primitive of primitives) {
         // --- Positions ---
         const positionAccessorIndex = primitive.attributes.POSITION;
-        if (positionAccessorIndex === undefined) continue; // Skip primitives without positions
+        if (positionAccessorIndex === undefined) continue; 
         
         const positions = getAccessorData(positionAccessorIndex) as Float32Array;
         const vertexCount = positions.length / 3;
@@ -180,6 +178,8 @@ export async function parseGlb(arrayBuffer: ArrayBuffer): Promise<Geometry> {
         allNormals.push(normals);
 
         // --- Colors ---
+        // We will normalize all colors to RGBA (4 components) float32 [0-1]
+        // If the source is RGB, we add A=1.0
         let colors: Float32Array;
         const colorAccessorIndex = primitive.attributes.COLOR_0;
 
@@ -190,42 +190,33 @@ export async function parseGlb(arrayBuffer: ArrayBuffer): Promise<Geometry> {
             const type = accessor.type;
             const count = accessor.count;
 
-            if (componentType === 5126 && type === 'VEC3') {
-                colors = rawColors as Float32Array;
-            } else {
-                colors = new Float32Array(count * 3);
-                const isVec4 = type === 'VEC4';
-                const srcStride = isVec4 ? 4 : 3;
-                
-                let normFactor = 1.0;
-                if (componentType === 5121) normFactor = 255.0;
-                if (componentType === 5123) normFactor = 65535.0;
-                
-                for (let i = 0; i < count; i++) {
-                    colors[i * 3] = rawColors[i * srcStride] / normFactor;
-                    colors[i * 3 + 1] = rawColors[i * srcStride + 1] / normFactor;
-                    colors[i * 3 + 2] = rawColors[i * srcStride + 2] / normFactor;
-                }
+            colors = new Float32Array(count * 4); // Always VEC4 in internal geometry
+            
+            const isVec4 = type === 'VEC4';
+            const isVec3 = type === 'VEC3';
+            const srcStride = isVec4 ? 4 : (isVec3 ? 3 : 0);
+            
+            if (isVec4) hasAlphaColor = true;
+
+            let normFactor = 1.0;
+            if (componentType === 5121) normFactor = 255.0; // UNSIGNED_BYTE
+            if (componentType === 5123) normFactor = 65535.0; // UNSIGNED_SHORT
+            
+            for (let i = 0; i < count; i++) {
+                colors[i * 4] = rawColors[i * srcStride] / normFactor;
+                colors[i * 4 + 1] = rawColors[i * srcStride + 1] / normFactor;
+                colors[i * 4 + 2] = rawColors[i * srcStride + 2] / normFactor;
+                colors[i * 4 + 3] = isVec4 ? rawColors[i * srcStride + 3] / normFactor : 1.0;
             }
         } else {
-            // Fallback: Use material base color
-            colors = new Float32Array(vertexCount * 3);
-            let r = 1, g = 1, b = 1;
-
-            if (primitive.material !== undefined) {
-                const material = gltf.materials?.[primitive.material];
-                const baseColorFactor = material?.pbrMetallicRoughness?.baseColorFactor;
-                if (baseColorFactor) {
-                    r = baseColorFactor[0];
-                    g = baseColorFactor[1];
-                    b = baseColorFactor[2];
-                }
-            }
-            
+            // Fallback: No vertex colors. Use dummy white (will be overridden by material usually)
+            // We do NOT bake material color here anymore, we let gltfBuilder handle material assignments via primitives
+            colors = new Float32Array(vertexCount * 4);
             for (let k = 0; k < vertexCount; k++) {
-                colors[k * 3] = r;
-                colors[k * 3 + 1] = g;
-                colors[k * 3 + 2] = b;
+                colors[k * 4] = 1.0; 
+                colors[k * 4 + 1] = 1.0; 
+                colors[k * 4 + 2] = 1.0; 
+                colors[k * 4 + 3] = 1.0;
             }
         }
         allColors.push(colors);
@@ -252,7 +243,7 @@ export async function parseGlb(arrayBuffer: ArrayBuffer): Promise<Geometry> {
                 }
             }
         } else {
-             uvs = new Float32Array(vertexCount * 2); // Zero UVs
+             uvs = new Float32Array(vertexCount * 2); 
         }
         allUVs.push(uvs);
 
@@ -274,30 +265,47 @@ export async function parseGlb(arrayBuffer: ArrayBuffer): Promise<Geometry> {
         }
         allIndices.push(indices);
 
-        // --- Texture ---
-        // We grab the texture from the first primitive that has one
-        if (!finalTexture && primitive.material !== undefined) {
+        // --- Material/Texture Info ---
+        let primTexture: string | undefined = undefined;
+        let primBaseColor: [number, number, number, number] | undefined = undefined;
+
+        if (primitive.material !== undefined) {
             const material = gltf.materials?.[primitive.material];
-            const textureInfo = material?.pbrMetallicRoughness?.baseColorTexture;
-            if (textureInfo) {
-                const textureIndex = textureInfo.index;
-                const tex = gltf.textures?.[textureIndex];
-                const imageIndex = tex?.source;
-                const image = gltf.images?.[imageIndex];
-                
-                if (image && image.bufferView !== undefined) {
-                    const bv = gltf.bufferViews[image.bufferView];
-                    const start = (bv.byteOffset || 0);
-                    const len = bv.byteLength;
-                    const imgBuffer = binaryBuffer!.slice(start, start + len);
-                    const base64 = arrayBufferToBase64(imgBuffer);
-                    const mime = image.mimeType || 'image/png';
-                    finalTexture = `data:${mime};base64,${base64}`;
-                } else if (image && image.uri && image.uri.startsWith('data:')) {
-                    finalTexture = image.uri;
+            if (material) {
+                const pbr = material.pbrMetallicRoughness;
+                if (pbr) {
+                    if (pbr.baseColorFactor) {
+                        primBaseColor = pbr.baseColorFactor;
+                    }
+                    if (pbr.baseColorTexture) {
+                         const textureIndex = pbr.baseColorTexture.index;
+                         const tex = gltf.textures?.[textureIndex];
+                         const imageIndex = tex?.source;
+                         const image = gltf.images?.[imageIndex];
+                         
+                         if (image && image.bufferView !== undefined) {
+                             const bv = gltf.bufferViews[image.bufferView];
+                             const start = (bv.byteOffset || 0);
+                             const len = bv.byteLength;
+                             const imgBuffer = binaryBuffer!.slice(start, start + len);
+                             const base64 = arrayBufferToBase64(imgBuffer);
+                             const mime = image.mimeType || 'image/png';
+                             primTexture = `data:${mime};base64,${base64}`;
+                         } else if (image && image.uri && image.uri.startsWith('data:')) {
+                             primTexture = image.uri;
+                         }
+                    }
                 }
             }
         }
+
+        // Store primitive metadata for reconstruction
+        geometryPrimitives.push({
+            indicesOffset: totalIndexCount, // Start index in the merged array
+            indicesCount: indices.length,
+            texture: primTexture,
+            color: primBaseColor
+        });
 
         totalVertexCount += vertexCount;
         totalIndexCount += indices.length;
@@ -306,7 +314,8 @@ export async function parseGlb(arrayBuffer: ArrayBuffer): Promise<Geometry> {
     // 7. Merge all data into single TypedArrays
     const mergedPositions = new Float32Array(totalVertexCount * 3);
     const mergedNormals = new Float32Array(totalVertexCount * 3);
-    const mergedColors = new Float32Array(totalVertexCount * 3);
+    // Always use 4 components for colors internally to support alpha
+    const mergedColors = new Float32Array(totalVertexCount * 4); 
     const mergedUVs = new Float32Array(totalVertexCount * 2);
     const mergedIndices = new Uint16Array(totalIndexCount);
 
@@ -323,8 +332,7 @@ export async function parseGlb(arrayBuffer: ArrayBuffer): Promise<Geometry> {
 
         mergedPositions.set(pos, vOffset);
         mergedNormals.set(norm, vOffset);
-        mergedColors.set(col, vOffset);
-        // UVs are 2 components per vertex, vOffset is 3. We track uvOffset separately or calculate
+        mergedColors.set(col, vOffset * (4/3)); // vOffset is based on VEC3, scale for VEC4
         mergedUVs.set(uv, (vOffset / 3) * 2);
 
         // Update indices: add current indexBase to every index
@@ -338,13 +346,21 @@ export async function parseGlb(arrayBuffer: ArrayBuffer): Promise<Geometry> {
         indexBase += vertexCount;
     }
 
+    // If no alpha was actually found, we could optimize back to VEC3, but VEC4 is safer for consistency
+    // However, if strict compatibility with other parts of the app is needed (which expect VEC3/Float32Array size)
+    // we might need to be careful. The new gltfBuilder will handle VEC4.
+    
+    // Fallback global texture (first one found) for legacy support
+    const fallbackTexture = geometryPrimitives.find(p => p.texture)?.texture;
+
     return { 
         positions: mergedPositions, 
         normals: mergedNormals, 
         indices: mergedIndices, 
         colors: mergedColors, 
         uvs: mergedUVs, 
-        texture: finalTexture 
+        texture: fallbackTexture,
+        primitives: geometryPrimitives
     };
 }
 

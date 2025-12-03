@@ -110,76 +110,10 @@ function generateGltfParts(shapes: Shape[]): { gltf: any; combinedBuffer: ArrayB
   let pElementOffset = 0, nElementOffset = 0, cElementOffset = 0, uvElementOffset = 0, iElementOffset = 0;
   
   shapes.forEach((shape, shapeIndex) => {
-    const { positions, normals, indices, colors, uvs, texture } = shape.geometry;
+    const { positions, normals, indices, colors, uvs, primitives } = shape.geometry;
 
-    // Manage Materials
-    let materialIndex: number;
-    let textureIndex: number | undefined;
-
-    // 3a. Handle Texture
-    if (texture) {
-        if (!textureMap.has(texture)) {
-            const imageIdx = images.length;
-            images.push({ uri: texture, mimeType: "image/png" }); // Assuming PNG or handled by browser
-            
-            const texIdx = textures.length;
-            textures.push({ sampler: 0, source: imageIdx });
-            textureMap.set(texture, texIdx);
-            textureIndex = texIdx;
-        } else {
-            textureIndex = textureMap.get(texture)!;
-        }
-    }
-
-    // 3b. Create Material
-    if (textureIndex !== undefined) {
-        // Texture Material
-        const matKey = `TEX_${textureIndex}`;
-        if (!materialMap.has(matKey)) {
-            materialIndex = materials.length;
-            materials.push({
-                pbrMetallicRoughness: {
-                    baseColorTexture: { index: textureIndex },
-                    baseColorFactor: [1.0, 1.0, 1.0, 1.0],
-                    metallicFactor: 0.0,
-                    roughnessFactor: 1.0
-                },
-                name: `Material_Texture_${textureIndex}`,
-                doubleSided: true
-            });
-            materialMap.set(matKey, materialIndex);
-        } else {
-            materialIndex = materialMap.get(matKey)!;
-        }
-    } else if (colors && colors.length > 0) {
-        // Vertex Color Material
-        const vertexColorKey = "##VERTEX_COLORS##";
-        if (!materialMap.has(vertexColorKey)) {
-            materialIndex = materials.length;
-            materials.push({
-                pbrMetallicRoughness: { baseColorFactor: [1.0, 1.0, 1.0, 1.0] },
-                name: "VertexColorMaterial",
-                doubleSided: true
-            });
-            materialMap.set(vertexColorKey, materialIndex);
-        } else {
-            materialIndex = materialMap.get(vertexColorKey)!;
-        }
-    } else {
-        // Flat Color Material
-        const defaultColor = [0.8, 0.8, 0.8, 1.0];
-        const colorKey = JSON.stringify(shape.color || defaultColor);
-        if (!materialMap.has(colorKey)) {
-            materialIndex = materials.length;
-            materials.push({
-                pbrMetallicRoughness: { baseColorFactor: shape.color || defaultColor },
-                name: `Material_${colorKey}`
-            });
-            materialMap.set(colorKey, materialIndex);
-        } else {
-            materialIndex = materialMap.get(colorKey)!;
-        }
-    }
+    const numVertices = positions.length / 3;
+    const isV4Colors = colors && (colors.length / numVertices === 4);
 
     // Accessors
     let minX = Infinity, minY = Infinity, minZ = Infinity;
@@ -202,7 +136,13 @@ function generateGltfParts(shapes: Shape[]): { gltf: any; combinedBuffer: ArrayB
     let colorAccessorIdx = -1;
     if (colors && colors.length > 0) {
       colorAccessorIdx = accessors.length;
-      accessors.push({ bufferView: 2, byteOffset: cElementOffset * Float32Array.BYTES_PER_ELEMENT, componentType: 5126, count: colors.length / 3, type: 'VEC3' });
+      accessors.push({ 
+          bufferView: 2, 
+          byteOffset: cElementOffset * Float32Array.BYTES_PER_ELEMENT, 
+          componentType: 5126, 
+          count: colors.length / (isV4Colors ? 4 : 3), 
+          type: isV4Colors ? 'VEC4' : 'VEC3' 
+      });
     }
 
     // UV Accessor
@@ -212,27 +152,132 @@ function generateGltfParts(shapes: Shape[]): { gltf: any; combinedBuffer: ArrayB
         accessors.push({ bufferView: uvBufferViewIdx, byteOffset: uvElementOffset * Float32Array.BYTES_PER_ELEMENT, componentType: 5126, count: uvs.length / 2, type: 'VEC2' });
     }
     
-    // Index Accessor
-    const indexAccessorIdx = accessors.length;
-    accessors.push({ bufferView: indexBufferViewIdx, byteOffset: iElementOffset * Uint16Array.BYTES_PER_ELEMENT, componentType: 5123, count: indices.length, type: 'SCALAR' });
+    // Helper to get/create material
+    const getMaterialIndex = (tex?: string, color?: [number, number, number, number]): number => {
+        if (tex) {
+            if (!textureMap.has(tex)) {
+                const imageIdx = images.length;
+                images.push({ uri: tex, mimeType: "image/png" });
+                const texIdx = textures.length;
+                textures.push({ sampler: 0, source: imageIdx });
+                textureMap.set(tex, texIdx);
+            }
+            const textureIndex = textureMap.get(tex)!;
+            const matKey = `TEX_${textureIndex}`;
+            if (!materialMap.has(matKey)) {
+                const mIdx = materials.length;
+                materials.push({
+                    pbrMetallicRoughness: {
+                        baseColorTexture: { index: textureIndex },
+                        baseColorFactor: color || [1.0, 1.0, 1.0, 1.0],
+                        metallicFactor: 0.0,
+                        roughnessFactor: 1.0
+                    },
+                    name: `Material_Texture_${textureIndex}`,
+                    doubleSided: true,
+                    alphaMode: 'MASK', // Crucial for trees/leaves!
+                    alphaCutoff: 0.5
+                });
+                materialMap.set(matKey, mIdx);
+                return mIdx;
+            }
+            return materialMap.get(matKey)!;
+        } else if (colors && colors.length > 0) {
+            // Use vertex colors
+            const matKey = "##VERTEX_COLORS##";
+            if (!materialMap.has(matKey)) {
+                const mIdx = materials.length;
+                materials.push({
+                    pbrMetallicRoughness: { baseColorFactor: [1.0, 1.0, 1.0, 1.0] },
+                    name: "VertexColorMaterial",
+                    doubleSided: true,
+                    alphaMode: isV4Colors ? 'BLEND' : 'OPAQUE'
+                });
+                materialMap.set(matKey, mIdx);
+                return mIdx;
+            }
+            return materialMap.get(matKey)!;
+        } else {
+            // Flat Color
+            const defaultColor = [0.8, 0.8, 0.8, 1.0];
+            const c = color || shape.color || defaultColor;
+            const matKey = JSON.stringify(c);
+            if (!materialMap.has(matKey)) {
+                const mIdx = materials.length;
+                materials.push({
+                    pbrMetallicRoughness: { baseColorFactor: c },
+                    name: `Material_${matKey}`,
+                    doubleSided: true
+                });
+                materialMap.set(matKey, mIdx);
+                return mIdx;
+            }
+            return materialMap.get(matKey)!;
+        }
+    };
 
-    // Mesh Primitive
-    const attributes: { [key: string]: number } = { POSITION: posAccessorIdx, NORMAL: normAccessorIdx };
-    if (colorAccessorIdx !== -1) attributes.COLOR_0 = colorAccessorIdx;
-    if (uvAccessorIdx !== -1) attributes.TEXCOORD_0 = uvAccessorIdx;
+    const meshPrimitives: any[] = [];
     
-    meshes.push({
-      primitives: [{
-        attributes,
-        indices: indexAccessorIdx,
-        mode: 4, // TRIANGLES
-        material: materialIndex,
-      }],
-    });
-    
+    if (primitives && primitives.length > 0) {
+        // Multi-primitive mesh
+        for (const prim of primitives) {
+            const matIndex = getMaterialIndex(prim.texture, prim.color);
+            
+            // Create a specific index accessor for this primitive
+            const primIndicesAccessorIdx = accessors.length;
+            
+            // The byte offset is the global offset (iElementOffset) plus the primitive's offset
+            const byteOffset = (iElementOffset + prim.indicesOffset) * Uint16Array.BYTES_PER_ELEMENT;
+            
+            accessors.push({
+                bufferView: indexBufferViewIdx,
+                byteOffset: byteOffset,
+                componentType: 5123,
+                count: prim.indicesCount,
+                type: 'SCALAR'
+            });
+
+            const attributes: { [key: string]: number } = { POSITION: posAccessorIdx, NORMAL: normAccessorIdx };
+            if (colorAccessorIdx !== -1) attributes.COLOR_0 = colorAccessorIdx;
+            if (uvAccessorIdx !== -1) attributes.TEXCOORD_0 = uvAccessorIdx;
+
+            meshPrimitives.push({
+                attributes,
+                indices: primIndicesAccessorIdx,
+                mode: 4,
+                material: matIndex
+            });
+        }
+    } else {
+        // Single primitive mesh (legacy/simple)
+        const matIndex = getMaterialIndex(shape.geometry.texture, undefined);
+        
+        // Use the full index range for this shape
+        const indexAccessorIdx = accessors.length;
+        accessors.push({ 
+            bufferView: indexBufferViewIdx, 
+            byteOffset: iElementOffset * Uint16Array.BYTES_PER_ELEMENT, 
+            componentType: 5123, 
+            count: indices.length, 
+            type: 'SCALAR' 
+        });
+
+        const attributes: { [key: string]: number } = { POSITION: posAccessorIdx, NORMAL: normAccessorIdx };
+        if (colorAccessorIdx !== -1) attributes.COLOR_0 = colorAccessorIdx;
+        if (uvAccessorIdx !== -1) attributes.TEXCOORD_0 = uvAccessorIdx;
+
+        meshPrimitives.push({
+            attributes,
+            indices: indexAccessorIdx,
+            mode: 4,
+            material: matIndex
+        });
+    }
+
+    meshes.push({ primitives: meshPrimitives });
     nodes.push({ mesh: shapeIndex, translation: shape.translation });
     
-    // Update element offsets
+    // Update global element offsets
     pElementOffset += positions.length;
     nElementOffset += normals.length;
     cElementOffset += colors ? colors.length : 0;

@@ -1,9 +1,7 @@
-import React from 'react';
+/// <reference types="react" />
 
-declare global {
-  namespace JSX {
-    interface IntrinsicElements {
-      'model-viewer': any;
-    }
+declare namespace JSX {
+  interface IntrinsicElements {
+    'model-viewer': any;
   }
 }
