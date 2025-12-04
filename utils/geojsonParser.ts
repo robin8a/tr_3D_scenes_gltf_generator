@@ -1,7 +1,7 @@
 
 import type { Shape } from './gltfBuilder';
 import type { Geometry } from './geometry';
-import { createTree, createRock } from './stockModels';
+import { createTree, createRock, GRASS_TEXTURE, WATER_TEXTURE } from './stockModels';
 import { parseObj } from './objParser';
 import { parseGlb } from './glbParser';
 
@@ -137,9 +137,12 @@ export async function parseGeoJsonToShapes(geojsonString: string, customModels: 
             const indices = triangulate(projectedPolygon);
             const positions = new Float32Array(projectedPolygon.flat().length * 1.5); // x,y,z for each point
             const normals = new Float32Array(projectedPolygon.flat().length * 1.5);
+            const uvs = new Float32Array(projectedPolygon.flat().length); // 2 floats per vertex
             
             let yLevel = 0.0;
             let color: [number, number, number, number] = [0.5, 0.5, 0.5, 1.0]; // Default color
+            let texture: string | undefined = undefined;
+            let uvScale = 1.0;
 
             switch (featureType) {
                 case 'asset':
@@ -148,11 +151,15 @@ export async function parseGeoJsonToShapes(geojsonString: string, customModels: 
                     break;
                 case 'grass':
                     yLevel = 0.01;
-                    color = [0.3, 0.6, 0.3, 1.0]; // Green
+                    color = [0.3, 0.6, 0.3, 1.0]; // Green fallback
+                    texture = GRASS_TEXTURE;
+                    uvScale = 0.5; // Controls texture tiling
                     break;
                 case 'river':
                     yLevel = 0.005; // Slightly lower than grass
-                    color = [0.3, 0.5, 0.8, 1.0]; // Blue
+                    color = [0.3, 0.5, 0.8, 1.0]; // Blue fallback
+                    texture = WATER_TEXTURE;
+                    uvScale = 0.5;
                     break;
                 case 'rock': // Rock terrain, not object
                      yLevel = 0.015;
@@ -163,18 +170,27 @@ export async function parseGeoJsonToShapes(geojsonString: string, customModels: 
             }
             
             projectedPolygon.forEach((p, i) => {
+                // Positions
                 positions[i * 3] = p[0];
                 positions[i * 3 + 1] = yLevel;
                 positions[i * 3 + 2] = p[1];
+                
+                // Normals (pointing straight up)
                 normals[i * 3] = 0;
-                normals[i * 3 + 1] = 1; // Pointing straight up
+                normals[i * 3 + 1] = 1;
                 normals[i * 3 + 2] = 0;
+
+                // UVs (Planar mapping)
+                uvs[i * 2] = p[0] * uvScale;
+                uvs[i * 2 + 1] = p[1] * uvScale;
             });
             
             const geometry: Geometry = {
                 positions,
                 normals,
                 indices: new Uint16Array(indices),
+                uvs,
+                texture
             };
 
             shapes.push({
