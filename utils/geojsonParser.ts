@@ -36,6 +36,7 @@ export interface CustomModelData {
 export interface CustomModels {
     tree?: CustomModelData;
     rock?: CustomModelData;
+    grass?: CustomModelData; // Support for custom grass model
 }
 
 /**
@@ -68,6 +69,22 @@ function getCentroid(polygon: Point[]): Point {
         sumZ += p[1];
     }
     return [sumX / polygon.length, sumZ / polygon.length];
+}
+
+/**
+ * Generates a random point inside a triangle using barycentric coordinates.
+ */
+function getRandomPointInTriangle(p1: Point, p2: Point, p3: Point): Point {
+    const r1 = Math.random();
+    const r2 = Math.random();
+    const sqrtR1 = Math.sqrt(r1);
+    const A = 1 - sqrtR1;
+    const B = sqrtR1 * (1 - r2);
+    const C = sqrtR1 * r2;
+    return [
+        A * p1[0] + B * p2[0] + C * p3[0],
+        A * p1[1] + B * p2[1] + C * p3[1]
+    ];
 }
 
 
@@ -119,6 +136,13 @@ export async function parseGeoJsonToShapes(geojsonString: string, customModels: 
     // Pre-create models so they are not re-parsed for every feature
     const treeModel = await getModel(customModels.tree, createTree);
     const rockModel = await getModel(customModels.rock, createRock);
+    
+    // Only create grass model if provided custom, otherwise we just use texture
+    let grassModel: Geometry | null = null;
+    if (customModels.grass) {
+        // Fallback to empty geometry if loading fails, but getModel handles most logic
+        grassModel = await getModel(customModels.grass, () => ({ positions: new Float32Array(0), normals: new Float32Array(0), indices: new Uint16Array(0) }));
+    }
 
     for (const feature of geojson.features) {
         if (feature.geometry.type !== 'Polygon') continue;
@@ -157,7 +181,7 @@ export async function parseGeoJsonToShapes(geojsonString: string, customModels: 
                     break;
                 case 'river':
                     yLevel = 0.005; // Slightly lower than grass
-                    color = [0.3, 0.5, 0.8, 1.0]; // Blue fallback
+                    color = [1.0, 1.0, 1.0, 1.0]; // White, so texture shows true colors
                     texture = WATER_TEXTURE;
                     uvScale = 0.5;
                     break;
@@ -193,11 +217,53 @@ export async function parseGeoJsonToShapes(geojsonString: string, customModels: 
                 texture
             };
 
+            // Add the base terrain shape
             shapes.push({
                 geometry,
                 translation: [0, 0, 0],
                 color
             });
+
+            // If it's grass and we have a custom model, distribute it!
+            if (featureType === 'grass' && grassModel) {
+                const density = 2.0; // Objects per square unit
+                
+                for (let i = 0; i < indices.length; i += 3) {
+                    const i1 = indices[i];
+                    const i2 = indices[i+1];
+                    const i3 = indices[i+2];
+                    
+                    // Extract X, Z from positions (Y is index+1)
+                    const p1: Point = [positions[i1*3], positions[i1*3+2]];
+                    const p2: Point = [positions[i2*3], positions[i2*3+2]];
+                    const p3: Point = [positions[i3*3], positions[i3*3+2]];
+                    
+                    // Calculate Area of triangle
+                    // Area = 0.5 * |x1(z2 - z3) + x2(z3 - z1) + x3(z1 - z2)|
+                    const area = 0.5 * Math.abs(p1[0]*(p2[1]-p3[1]) + p2[0]*(p3[1]-p1[1]) + p3[0]*(p1[1]-p2[1]));
+                    
+                    const count = Math.floor(area * density);
+                    
+                    for (let k = 0; k < count; k++) {
+                        const pt = getRandomPointInTriangle(p1, p2, p3);
+                        
+                        // Random rotation around Y axis
+                        const angle = Math.random() * Math.PI * 2;
+                        const rotQ: [number, number, number, number] = [0, Math.sin(angle/2), 0, Math.cos(angle/2)];
+                        
+                        // Random scale variation (0.8 to 1.2)
+                        const scaleVar = 0.8 + Math.random() * 0.4;
+                        
+                        shapes.push({
+                            geometry: grassModel,
+                            translation: [pt[0], yLevel, pt[1]],
+                            rotation: rotQ,
+                            scale: [scaleVar, scaleVar, scaleVar],
+                            color: [1, 1, 1, 1] // Keep model colors
+                        });
+                    }
+                }
+            }
         }
     }
     return shapes;

@@ -4,6 +4,8 @@ import type { Geometry } from './geometry';
 export interface Shape {
   geometry: Geometry;
   translation: [number, number, number];
+  rotation?: [number, number, number, number]; // Quaternion [x, y, z, w]
+  scale?: [number, number, number]; // [x, y, z]
   color?: [number, number, number, number]; // RGBA color, used if no vertex colors
 }
 
@@ -275,7 +277,11 @@ function generateGltfParts(shapes: Shape[]): { gltf: any; combinedBuffer: ArrayB
     }
 
     meshes.push({ primitives: meshPrimitives });
-    nodes.push({ mesh: shapeIndex, translation: shape.translation });
+    
+    const node: any = { mesh: shapeIndex, translation: shape.translation };
+    if (shape.rotation) node.rotation = shape.rotation;
+    if (shape.scale) node.scale = shape.scale;
+    nodes.push(node);
     
     // Update global element offsets
     pElementOffset += positions.length;

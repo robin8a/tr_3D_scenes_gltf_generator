@@ -104,7 +104,7 @@ const App: React.FC = () => {
     fileInputRef.current?.click();
   };
 
-  const handleCustomModelChange = (type: 'tree' | 'rock', fileType: 'obj' | 'mtl' | 'glb', file: File | null) => {
+  const handleCustomModelChange = (type: 'tree' | 'rock' | 'grass', fileType: 'obj' | 'mtl' | 'glb', file: File | null) => {
     if (!file) return;
 
     if (fileType === 'glb') {
@@ -142,7 +142,7 @@ const App: React.FC = () => {
     }
   };
   
-  const clearCustomModel = (type: 'tree' | 'rock') => {
+  const clearCustomModel = (type: 'tree' | 'rock' | 'grass') => {
       setCustomModels(prev => {
           const { [type]: _, ...rest } = prev;
           return rest;
@@ -279,6 +279,12 @@ const App: React.FC = () => {
                         onChange={handleCustomModelChange}
                         onClear={clearCustomModel}
                     />
+                     <CustomModelUploader
+                        type="grass"
+                        modelData={customModels.grass}
+                        onChange={handleCustomModelChange}
+                        onClear={clearCustomModel}
+                    />
                 </div>
             </div>
         </section>
@@ -294,10 +300,10 @@ const App: React.FC = () => {
 // --- Helper Component for Custom Model Uploads ---
 
 interface CustomModelUploaderProps {
-    type: 'tree' | 'rock';
+    type: 'tree' | 'rock' | 'grass';
     modelData?: CustomModelData;
-    onChange: (type: 'tree' | 'rock', fileType: 'obj' | 'mtl' | 'glb', file: File | null) => void;
-    onClear: (type: 'tree' | 'rock') => void;
+    onChange: (type: 'tree' | 'rock' | 'grass', fileType: 'obj' | 'mtl' | 'glb', file: File | null) => void;
+    onClear: (type: 'tree' | 'rock' | 'grass') => void;
 }
 
 const CustomModelUploader: React.FC<CustomModelUploaderProps> = ({ type, modelData, onChange, onClear }) => {
