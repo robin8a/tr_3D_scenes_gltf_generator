@@ -155,7 +155,11 @@ function generateGltfParts(shapes: Shape[]): { gltf: any; combinedBuffer: ArrayB
     }
     
     // Helper to get/create material
-    const getMaterialIndex = (tex?: string, color?: [number, number, number, number]): number => {
+    const getMaterialIndex = (tex?: string, normalTex?: string, color?: [number, number, number, number]): number => {
+        let textureIndex = undefined;
+        let normalTextureIndex = undefined;
+
+        // Process Base Color Texture
         if (tex) {
             if (!textureMap.has(tex)) {
                 const imageIdx = images.length;
@@ -164,58 +168,60 @@ function generateGltfParts(shapes: Shape[]): { gltf: any; combinedBuffer: ArrayB
                 textures.push({ sampler: 0, source: imageIdx });
                 textureMap.set(tex, texIdx);
             }
-            const textureIndex = textureMap.get(tex)!;
-            const matKey = `TEX_${textureIndex}`;
-            if (!materialMap.has(matKey)) {
-                const mIdx = materials.length;
-                materials.push({
-                    pbrMetallicRoughness: {
-                        baseColorTexture: { index: textureIndex },
-                        baseColorFactor: color || [1.0, 1.0, 1.0, 1.0],
-                        metallicFactor: 0.0,
-                        roughnessFactor: 1.0
-                    },
-                    name: `Material_Texture_${textureIndex}`,
-                    doubleSided: true,
-                    alphaMode: 'MASK', // Crucial for trees/leaves!
-                    alphaCutoff: 0.5
-                });
-                materialMap.set(matKey, mIdx);
-                return mIdx;
-            }
-            return materialMap.get(matKey)!;
-        } else if (colors && colors.length > 0) {
-            // Use vertex colors
-            const matKey = "##VERTEX_COLORS##";
-            if (!materialMap.has(matKey)) {
-                const mIdx = materials.length;
-                materials.push({
-                    pbrMetallicRoughness: { baseColorFactor: [1.0, 1.0, 1.0, 1.0] },
-                    name: "VertexColorMaterial",
-                    doubleSided: true,
-                    alphaMode: isV4Colors ? 'BLEND' : 'OPAQUE'
-                });
-                materialMap.set(matKey, mIdx);
-                return mIdx;
-            }
-            return materialMap.get(matKey)!;
-        } else {
-            // Flat Color
-            const defaultColor = [0.8, 0.8, 0.8, 1.0];
-            const c = color || shape.color || defaultColor;
-            const matKey = JSON.stringify(c);
-            if (!materialMap.has(matKey)) {
-                const mIdx = materials.length;
-                materials.push({
-                    pbrMetallicRoughness: { baseColorFactor: c },
-                    name: `Material_${matKey}`,
-                    doubleSided: true
-                });
-                materialMap.set(matKey, mIdx);
-                return mIdx;
-            }
-            return materialMap.get(matKey)!;
+            textureIndex = textureMap.get(tex)!;
         }
+
+        // Process Normal Texture
+        if (normalTex) {
+            if (!textureMap.has(normalTex)) {
+                const imageIdx = images.length;
+                images.push({ uri: normalTex, mimeType: "image/png" });
+                const texIdx = textures.length;
+                textures.push({ sampler: 0, source: imageIdx });
+                textureMap.set(normalTex, texIdx);
+            }
+            normalTextureIndex = textureMap.get(normalTex)!;
+        }
+        
+        // Check for existing material
+        const matKey = `TEX_${textureIndex}_NORM_${normalTextureIndex}_COL_${color ? color.join(',') : 'default'}`;
+
+        if (!materialMap.has(matKey)) {
+            const mIdx = materials.length;
+            const matDef: any = {
+                name: `Material_${mIdx}`,
+                doubleSided: true,
+                pbrMetallicRoughness: {
+                    baseColorFactor: color || [1.0, 1.0, 1.0, 1.0],
+                    metallicFactor: 0.0,
+                    roughnessFactor: 0.8
+                }
+            };
+
+            // Apply texture specific properties
+            if (textureIndex !== undefined) {
+                matDef.pbrMetallicRoughness.baseColorTexture = { index: textureIndex };
+                matDef.alphaMode = 'MASK'; // Default for textured objects like leaves
+                matDef.alphaCutoff = 0.5;
+            } else if (color && color.length === 4 && color[3] < 1.0) {
+                 matDef.alphaMode = 'BLEND';
+            } else {
+                 matDef.alphaMode = 'OPAQUE';
+            }
+
+            // Apply normal map
+            if (normalTextureIndex !== undefined) {
+                matDef.normalTexture = { index: normalTextureIndex, scale: 1.0 };
+                // Makes surface shiny if it has a normal map (like water)
+                matDef.pbrMetallicRoughness.roughnessFactor = 0.3; 
+                matDef.alphaMode = 'OPAQUE'; // Enforce opaque for water unless it has alpha
+            }
+
+            materials.push(matDef);
+            materialMap.set(matKey, mIdx);
+            return mIdx;
+        }
+        return materialMap.get(matKey)!;
     };
 
     const meshPrimitives: any[] = [];
@@ -223,7 +229,7 @@ function generateGltfParts(shapes: Shape[]): { gltf: any; combinedBuffer: ArrayB
     if (primitives && primitives.length > 0) {
         // Multi-primitive mesh
         for (const prim of primitives) {
-            const matIndex = getMaterialIndex(prim.texture, prim.color);
+            const matIndex = getMaterialIndex(prim.texture, prim.normalTexture, prim.color);
             
             // Create a specific index accessor for this primitive
             const primIndicesAccessorIdx = accessors.length;
@@ -252,7 +258,8 @@ function generateGltfParts(shapes: Shape[]): { gltf: any; combinedBuffer: ArrayB
         }
     } else {
         // Single primitive mesh (legacy/simple)
-        const matIndex = getMaterialIndex(shape.geometry.texture, undefined);
+        // Fix: Use shape.color if available to tint the material/texture
+        const matIndex = getMaterialIndex(shape.geometry.texture, shape.geometry.normalTexture, shape.color);
         
         // Use the full index range for this shape
         const indexAccessorIdx = accessors.length;

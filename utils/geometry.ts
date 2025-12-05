@@ -3,6 +3,7 @@ export interface GeometryPrimitive {
   indicesOffset: number; // Start index in the main indices array
   indicesCount: number;  // Number of indices for this primitive
   texture?: string;      // Specific texture for this primitive
+  normalTexture?: string; // Specific normal map for this primitive
   color?: [number, number, number, number]; // Specific base color
 }
 
@@ -13,6 +14,7 @@ export interface Geometry {
   colors?: Float32Array;
   uvs?: Float32Array;
   texture?: string; // Legacy/Fallback global texture
+  normalTexture?: string; // Legacy/Fallback global normal map
   primitives?: GeometryPrimitive[]; // Breakdown of geometry into material groups
 }
 

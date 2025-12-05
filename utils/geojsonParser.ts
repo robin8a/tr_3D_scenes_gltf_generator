@@ -1,7 +1,7 @@
 
 import type { Shape } from './gltfBuilder';
 import type { Geometry } from './geometry';
-import { createTree, createRock, GRASS_TEXTURE, WATER_TEXTURE } from './stockModels';
+import { createTree, createRock, GRASS_TEXTURE, WATER_TEXTURE, WATER_NORMAL_TEXTURE } from './stockModels';
 import { parseObj } from './objParser';
 import { parseGlb } from './glbParser';
 
@@ -166,6 +166,7 @@ export async function parseGeoJsonToShapes(geojsonString: string, customModels: 
             let yLevel = 0.0;
             let color: [number, number, number, number] = [0.5, 0.5, 0.5, 1.0]; // Default color
             let texture: string | undefined = undefined;
+            let normalTexture: string | undefined = undefined;
             let uvScale = 1.0;
 
             switch (featureType) {
@@ -181,8 +182,10 @@ export async function parseGeoJsonToShapes(geojsonString: string, customModels: 
                     break;
                 case 'river':
                     yLevel = 0.005; // Slightly lower than grass
-                    color = [1.0, 1.0, 1.0, 1.0]; // White, so texture shows true colors
+                    // Blue tint to colorize the grayscale water texture
+                    color = [0.2, 0.4, 0.8, 1.0];
                     texture = WATER_TEXTURE;
+                    normalTexture = WATER_NORMAL_TEXTURE;
                     uvScale = 0.5;
                     break;
                 case 'rock': // Rock terrain, not object
@@ -214,7 +217,8 @@ export async function parseGeoJsonToShapes(geojsonString: string, customModels: 
                 normals,
                 indices: new Uint16Array(indices),
                 uvs,
-                texture
+                texture,
+                normalTexture
             };
 
             // Add the base terrain shape
