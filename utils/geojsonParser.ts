@@ -1,7 +1,7 @@
 
 import type { Shape } from './gltfBuilder';
 import type { Geometry } from './geometry';
-import { createTree, createRock, GRASS_TEXTURE, WATER_TEXTURE, WATER_NORMAL_TEXTURE } from './stockModels';
+import { createTree, createRock, GRASS_TEXTURE, WATER_TEXTURE, WATER_NORMAL_TEXTURE, GRASS_NORMAL_TEXTURE } from './stockModels';
 import { parseObj } from './objParser';
 import { parseGlb } from './glbParser';
 
@@ -176,9 +176,11 @@ export async function parseGeoJsonToShapes(geojsonString: string, customModels: 
                     break;
                 case 'grass':
                     yLevel = 0.01;
-                    color = [0.3, 0.6, 0.3, 1.0]; // Green fallback
+                    // Green tint similar to how water has a blue tint
+                    color = [0.1, 0.6, 0.1, 1.0]; 
                     texture = GRASS_TEXTURE;
-                    uvScale = 0.5; // Controls texture tiling
+                    normalTexture = GRASS_NORMAL_TEXTURE;
+                    uvScale = 2.0; // Moderate scale for tiling
                     break;
                 case 'river':
                     yLevel = 0.005; // Slightly lower than grass
