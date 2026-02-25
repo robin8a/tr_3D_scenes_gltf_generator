@@ -1,5 +1,9 @@
-declare namespace JSX {
-  interface IntrinsicElements {
-    [elemName: string]: any;
+import 'react';
+
+declare module 'react' {
+  namespace JSX {
+    interface IntrinsicElements {
+      'model-viewer': any;
+    }
   }
 }

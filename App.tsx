@@ -12,8 +12,27 @@ const App: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [sceneTitle, setSceneTitle] = useState<string>('Loading Initial Scene...');
   const [customModels, setCustomModels] = useState<CustomModels>({});
+  const [webglSupported, setWebglSupported] = useState<boolean>(true);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Check for WebGL support
+  useEffect(() => {
+    const checkWebGL = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+        if (!gl) {
+          setWebglSupported(false);
+          setError("WebGL is not supported or enabled in your browser. This application requires WebGL to display 3D scenes.");
+        }
+      } catch (e) {
+        setWebglSupported(false);
+        setError("An error occurred while checking for WebGL support.");
+      }
+    };
+    checkWebGL();
+  }, []);
 
   // Generate a default scene on initial load
   useEffect(() => {
@@ -203,7 +222,7 @@ const App: React.FC = () => {
                         <p className="text-red-300 mt-2">{error}</p>
                     </div>
                 )}
-                {sceneUrl && !isLoading && !error && (
+                {sceneUrl && !isLoading && !error && webglSupported && (
                     <model-viewer
                     src={sceneUrl}
                     alt={sceneTitle}
@@ -214,6 +233,20 @@ const App: React.FC = () => {
                     shadow-intensity="1"
                     style={{ width: '100%', height: '100%', '--poster-color': 'transparent', borderRadius: '8px' }}
                     ></model-viewer>
+                )}
+                {!webglSupported && !isLoading && (
+                    <div className="p-8 text-center max-w-md">
+                        <div className="bg-red-900/20 border border-red-500/50 rounded-xl p-6">
+                            <p className="text-red-400 font-bold text-xl mb-2">WebGL Unavailable</p>
+                            <p className="text-gray-300 text-sm leading-relaxed">
+                                Your browser or hardware does not support WebGL, which is required to view 3D models. 
+                                Please ensure hardware acceleration is enabled in your browser settings.
+                            </p>
+                            <div className="mt-4 text-xs text-gray-500 font-mono">
+                                Error: BindToCurrentSequence failed
+                            </div>
+                        </div>
+                    </div>
                 )}
             </div>
             
